@@ -1,0 +1,23 @@
+# Factorio appliance. Long-lived; the supervisor owns the engine inside.
+#
+# Networking note: under Docker Desktop on WSL2, `network_mode: host` binds to
+# the Desktop VM namespace rather than the WSL distro's eth0, so we publish
+# ports explicitly instead. Control is bound to loopback (the Effector runs on
+# the same host); the game UDP port is published broadly for Steam-join.
+services:
+  factorio:
+    build:
+      context: .
+      args:
+        FACTORIO_VERSION: "2.0.77"
+    image: game-bot/factorio-appliance:2.0.77
+    container_name: factorio-appliance
+    restart: unless-stopped
+    ports:
+      - "12140:12140/udp"   # game traffic (Steam-join)
+      - "12142:12142"       # supervisor control surface (Effector only)
+    volumes:
+      - factorio-saves:/factorio/saves
+
+volumes:
+  factorio-saves:
