@@ -62,7 +62,3 @@ class SimpleBot(Bot):
     @staticmethod
     def _ordered(state: GameState, moves: list[str]) -> list[str]:
         return sorted(moves, key=lambda uci: not state.is_capture(uci))
-
-
-if __name__ == "__main__":
-    SimpleBot.main()

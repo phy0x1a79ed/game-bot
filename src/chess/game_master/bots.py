@@ -126,19 +126,25 @@ class BotProcess:
                 env=env,
                 start_new_session=True,
             )
+        await self.handshake(asyncio.ensure_future(self.proc.wait()))
+
+    async def handshake(self, exited: asyncio.Future) -> None:
+        """Connect to the bot's socket, send `hello`, and wait for `ready`.
+
+        `exited` resolves when the bot stops, which ends the wait for its socket.
+        """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + READY_TIMEOUT_S
 
         connecting = asyncio.create_task(
             transport.connect(self.socket_path, transport.BOT_URI, timeout=READY_TIMEOUT_S)
         )
-        exited = asyncio.create_task(self.proc.wait())
         await asyncio.wait({connecting, exited}, return_when=asyncio.FIRST_COMPLETED)
         if not connecting.done():
             connecting.cancel()
+            code = self.proc.returncode if self.proc else None
             raise BotFailed(
-                f"bot {self.name!r} exited with code {self.proc.returncode} before "
-                f"listening; see {self.log_path}"
+                f"bot {self.name!r} exited with code {code} before listening; see {self.log_path}"
             )
         exited.cancel()
         try:
