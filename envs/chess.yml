@@ -1,0 +1,9 @@
+name: chess
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - websockets>=13
+  - chess
+  - pytest
+  - pytest-asyncio
