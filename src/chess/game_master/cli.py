@@ -9,26 +9,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
-import shutil
-import signal
-import subprocess
 import sys
-import time
-from pathlib import Path
 from typing import Any
 
-from coms import rpc
-from coms.protocol import ProtocolError, RpcError
+from coms.protocol import RpcError
 from game import GameState
-from game_master import paths
+from game_master import paths, saves, sessions
 
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_NO_SESSION = 3
-
-SESSION_START_TIMEOUT_S = 15.0
-INIT_TIMEOUT_S = 60.0
 
 
 class CliError(Exception):
@@ -40,47 +30,8 @@ class CliError(Exception):
 # --- sessions ---
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    return True
-
-
-def _session_pid(sid: str) -> int | None:
-    try:
-        return int((paths.session_dir(sid) / "gm.pid").read_text().strip())
-    except (OSError, ValueError):
-        return None
-
-
-def _live_sessions() -> list[str]:
-    """Session ids with a running daemon. Removes directories left by dead ones."""
-    if not paths.RUNTIME.is_dir():
-        return []
-    live = []
-    for entry in sorted(paths.RUNTIME.iterdir()):
-        if not (entry.is_dir() and paths.SID_RE.match(entry.name)):
-            continue
-        pid = _session_pid(entry.name)
-        if pid is None:
-            # A daemon writes gm.pid right after binding gm.sock. A directory
-            # this old without one belongs to a daemon that died starting up.
-            if time.time() - entry.stat().st_mtime > SESSION_START_TIMEOUT_S:
-                shutil.rmtree(entry, ignore_errors=True)
-            continue
-        if _pid_alive(pid):
-            live.append(entry.name)
-        else:
-            shutil.rmtree(entry, ignore_errors=True)
-    return live
-
-
 def _resolve_sid(sid: str | None) -> str:
-    live = _live_sessions()
+    live = sessions.live_sessions()
     if sid is None:
         if len(live) == 1:
             return live[0]
@@ -96,70 +47,19 @@ def _resolve_sid(sid: str | None) -> str:
 
 def _call(sid: str, method: str, params: dict[str, Any] | None = None,
           timeout: float = 30.0) -> Any:
-    sock = paths.session_dir(sid) / "gm.sock"
     try:
-        return asyncio.run(rpc.call(sock, method, params, timeout=timeout))
+        return asyncio.run(sessions.call(sid, method, params, timeout=timeout))
     except RpcError as exc:
         raise CliError(f"{method} failed: {exc.code}: {exc.message}") from exc
-    except (ConnectionError, ProtocolError, TimeoutError) as exc:
-        raise CliError(f"session {sid} did not answer {method}: {exc}", EXIT_NO_SESSION) from exc
-
-
-def _log_tail(path: Path, lines: int = 20) -> str:
-    try:
-        return "\n".join(path.read_text(errors="replace").splitlines()[-lines:])
-    except OSError:
-        return "(no log)"
-
-
-def _terminate(proc: subprocess.Popen, sid: str) -> None:
-    if proc.poll() is None:
-        proc.send_signal(signal.SIGTERM)
-        try:
-            proc.wait(timeout=15)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-    shutil.rmtree(paths.session_dir(sid), ignore_errors=True)
+    except sessions.Unreachable as exc:
+        raise CliError(str(exc), EXIT_NO_SESSION) from exc
 
 
 def _create_session(method: str, params: dict[str, Any]) -> tuple[str, Any]:
-    sid = paths.mint_sid()
-    records = paths.records_dir(sid)
-    records.mkdir(parents=True)
-    log_path = records / "gm.log"
-    env = dict(os.environ, PYTHONPATH=str(paths.SRC))
-    with log_path.open("ab") as log_file:
-        # Detached with its own output, so the CLI (and `mamba run` around it)
-        # exits without waiting on the daemon.
-        proc = subprocess.Popen(
-            [sys.executable, "-m", "game_master.daemon", "--session", sid],
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            cwd=paths.REPO_ROOT,
-            env=env,
-            start_new_session=True,
-        )
-
-    def fail(message: str) -> CliError:
-        _terminate(proc, sid)
-        tail = _log_tail(log_path)
-        shutil.rmtree(records, ignore_errors=True)
-        return CliError(f"{message}\n--- gm.log ---\n{tail}")
-
-    deadline = time.monotonic() + SESSION_START_TIMEOUT_S
-    while _session_pid(sid) is None:
-        if proc.poll() is not None:
-            raise fail(f"game master exited with code {proc.returncode} during startup")
-        if time.monotonic() > deadline:
-            raise fail("game master did not start in time")
-        time.sleep(0.05)
     try:
-        result = _call(sid, method, params, timeout=INIT_TIMEOUT_S)
-    except CliError as exc:
-        raise fail(str(exc)) from exc
-    return sid, result
+        return asyncio.run(sessions.create(method, params))
+    except sessions.SessionError as exc:
+        raise CliError(str(exc)) from exc
 
 
 # --- commands ---
@@ -174,6 +74,7 @@ def cmd_start(args: argparse.Namespace) -> Any:
         "move_timeout_s": args.timeout,
         "max_attempts": args.max_attempts,
         "max_plies": args.max_plies,
+        "min_ply_s": args.pace,
     }
     if args.fen is not None:
         params["fen"] = args.fen
@@ -184,27 +85,28 @@ def cmd_start(args: argparse.Namespace) -> Any:
 
 
 def cmd_load(args: argparse.Namespace) -> Any:
-    if not paths.SAVE_NAME_RE.match(args.name):
-        raise CliError(f"bad save name {args.name!r}", EXIT_USAGE)
-    if not (paths.SAVES / f"{args.name}.json").is_file():
+    try:
+        path = saves.path_of(args.name)
+    except ValueError as exc:
+        raise CliError(str(exc), EXIT_USAGE) from exc
+    if not path.is_file():
         raise CliError(f"no save named {args.name!r}; see `saves`")
     sid, _ = _create_session("load", {"name": args.name, "play": args.play})
     return {"sid": sid}
 
 
 def cmd_ls(args: argparse.Namespace) -> Any:
-    sessions = []
-    for sid in _live_sessions():
+    found = []
+    for sid in sessions.live_sessions():
         try:
-            sessions.append(_call(sid, "status", timeout=5.0))
+            found.append(_call(sid, "status", timeout=5.0))
         except CliError as exc:
-            sessions.append({"sid": sid, "phase": "unreachable", "note": str(exc)})
-    return {"sessions": sessions}
+            found.append({"sid": sid, "phase": "unreachable", "note": str(exc)})
+    return {"sessions": found}
 
 
 def cmd_saves(args: argparse.Namespace) -> Any:
-    saves = sorted(p.stem for p in paths.SAVES.glob("*.json")) if paths.SAVES.is_dir() else []
-    return {"saves": saves}
+    return {"saves": saves.names()}
 
 
 def cmd_status(args: argparse.Namespace) -> Any:
@@ -233,20 +135,39 @@ def cmd_save(args: argparse.Namespace) -> Any:
     return _call(_resolve_sid(sid), "save", {"name": name, "overwrite": args.overwrite})
 
 
+def cmd_move(args: argparse.Namespace) -> Any:
+    sid, uci = (None, args.words[0]) if len(args.words) == 1 else args.words
+    sid = _resolve_sid(sid)
+    waiting = _call(sid, "state").get("awaiting")
+    if not (waiting and waiting["external"]):
+        raise CliError("no external seat is to move")
+    result = _call(sid, "submit_move", {"color": waiting["color"], "game_id": waiting["game_id"],
+                                        "ply": waiting["ply"], "move": uci})
+    if not result["accepted"]:
+        raise CliError(f"move {uci} rejected: {result['reason']}")
+    return result
+
+
+def cmd_step(args: argparse.Namespace) -> Any:
+    return _call(_resolve_sid(args.sid), "step", timeout=120.0)
+
+
+def cmd_pace(args: argparse.Namespace) -> Any:
+    sid, value = (None, args.words[0]) if len(args.words) == 1 else args.words
+    try:
+        seconds = float(value)
+    except ValueError as exc:
+        raise CliError(f"bad pace {value!r}; give seconds", EXIT_USAGE) from exc
+    return _call(_resolve_sid(sid), "set_pace", {"min_ply_s": seconds})
+
+
+def cmd_resign(args: argparse.Namespace) -> Any:
+    return _call(_resolve_sid(args.sid), "resign", {"color": args.color})
+
+
 def cmd_kill(args: argparse.Namespace) -> Any:
     sid = _resolve_sid(args.sid)
-    pid = _session_pid(sid)
-    try:
-        _call(sid, "shutdown")
-    except CliError:
-        if pid is not None:
-            os.kill(pid, signal.SIGTERM)
-    deadline = time.monotonic() + 20.0
-    while pid is not None and _pid_alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    if pid is not None and _pid_alive(pid):
-        os.kill(pid, signal.SIGKILL)
-    shutil.rmtree(paths.session_dir(sid), ignore_errors=True)
+    asyncio.run(sessions.kill(sid))
     return {"killed": sid}
 
 
@@ -286,7 +207,8 @@ def show_status(s: dict[str, Any]) -> None:
     print(f"score    {_score_line(s)}")
     for b in s["bots"]:
         state = "alive" if b["alive"] else "dead"
-        print(f"bot {b['slot']}    {b['name']} as {b['color']}  pid {b['pid']}  {state}")
+        proc = "external" if b.get("external") else f"pid {b['pid']}"
+        print(f"bot {b['slot']}    {b['name']} as {b['color']}  {proc}  {state}")
     if s.get("loaded_from"):
         print(f"loaded   {s['loaded_from']}")
     if s.get("note"):
@@ -306,6 +228,8 @@ def show_state(s: dict[str, Any]) -> None:
         print(f"outcome  {s['outcome']['result']} ({s['outcome']['reason']})")
     else:
         print(f"legal    {len(s['legal_moves'])} moves")
+    if s.get("awaiting"):
+        print(f"waiting  on {s['awaiting']['seat']} ({s['awaiting']['color']})")
 
 
 def show_history(h: dict[str, Any]) -> None:
@@ -336,6 +260,22 @@ def show_kill(result: dict[str, Any]) -> None:
     print(f"killed {result['killed']}")
 
 
+def show_move(result: dict[str, Any]) -> None:
+    print(result["san"])
+
+
+def show_resign(result: dict[str, Any]) -> None:
+    print(f"{result['result']} ({result['reason']})")
+
+
+def show_step(result: dict[str, Any]) -> None:
+    print(f"{result['phase']} at ply {result['ply']}")
+
+
+def show_pace(result: dict[str, Any]) -> None:
+    print(f"{result['min_ply_s']:g}s")
+
+
 COMMANDS = {
     "start": (cmd_start, show_start),
     "load": (cmd_load, show_start),
@@ -348,6 +288,10 @@ COMMANDS = {
     "resume": (cmd_resume, show_phase),
     "save": (cmd_save, show_save),
     "kill": (cmd_kill, show_kill),
+    "move": (cmd_move, show_move),
+    "resign": (cmd_resign, show_resign),
+    "step": (cmd_step, show_step),
+    "pace": (cmd_pace, show_pace),
 }
 
 
@@ -358,7 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("start", parents=[common], help="start a new session and print its id")
-    p.add_argument("--white", required=True, help="bot name, as in src/chess/ai_<name>")
+    p.add_argument("--white", required=True,
+                   help="bot name, as in src/chess/ai_<name>, or @name for an external seat")
     p.add_argument("--black", required=True)
     p.add_argument("--games", type=int, default=1)
     p.add_argument("--no-alternate", action="store_true", help="keep colors fixed across games")
@@ -367,6 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-attempts", type=int, default=5)
     p.add_argument("--max-plies", type=int, default=500)
     p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--pace", type=float, default=0.0, help="minimum seconds between bot plies")
 
     p = sub.add_parser("load", parents=[common], help="load a save into a new session")
     p.add_argument("name")
@@ -380,6 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("state", "current board"),
         ("stop", "halt play after the move in flight"),
         ("resume", "continue a stopped session"),
+        ("step", "play one ply of a stopped session"),
         ("kill", "shut a session down"),
     ]:
         p = sub.add_parser(name, parents=[common], help=help_text)
@@ -392,14 +339,25 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("save", parents=[common], help="save a session: save [sid] <name>")
     p.add_argument("words", nargs="+", metavar="[sid] name")
     p.add_argument("--overwrite", action="store_true")
+
+    p = sub.add_parser("move", parents=[common],
+                       help="play the waiting external seat's move: move [sid] <uci>")
+    p.add_argument("words", nargs="+", metavar="[sid] uci")
+
+    p = sub.add_parser("pace", parents=[common], help="set the pace of a session: pace [sid] <seconds>")
+    p.add_argument("words", nargs="+", metavar="[sid] seconds")
+
+    p = sub.add_parser("resign", parents=[common], help="resign the current game for an external seat")
+    p.add_argument("sid", nargs="?")
+    p.add_argument("--color", required=True, choices=["white", "black"])
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "save" and len(args.words) > 2:
-        parser.error("save takes [sid] <name>")
+    if args.command in ("save", "move", "pace") and len(args.words) > 2:
+        parser.error(f"{args.command} takes [sid] and one value")
     run, show = COMMANDS[args.command]
     try:
         result = run(args)

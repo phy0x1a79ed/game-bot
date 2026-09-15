@@ -5,7 +5,7 @@
 This file is the source of truth for the two message contracts of the chess arena:
 
 - **Contract A** covers the game master and a bot.
-- **Contract B** covers the CLI and a game master session.
+- **Contract B** covers a client, such as the CLI, and a game master session.
 
 `protocol.py` implements exactly these messages. Change this file and `protocol.py` together. A field that exists in one but not the other breaks bots silently, because both sides ignore unknown fields.
 
@@ -77,13 +77,13 @@ Protocol version 1.
 6. GM: `{"type":"move_rejected","game_id":"k3x9a-1","ply":0,"move":"e2e5","reason":"illegal","legal_moves":["g1h3","…"],"attempts_left":4,"remaining_s":4.9}`
 7. Bot: `{"type":"move","game_id":"k3x9a-1","ply":0,"move":"e2e4"}`
 
-## Contract B: CLI and game master session
+## Contract B: client and game master session
 
 ### Transport
 
 - Each session listens on `/tmp/chess-arena-<uid>/<sid>/gm.sock`. The directory has mode 0700.
 - The client connects with the URI `ws://localhost/control`.
-- Each call opens a connection, sends one request, reads one response, and closes.
+- Each call opens a connection, sends one request, reads one response, and closes. `watch` is the exception: the connection stays open for event frames.
 
 ### Frames
 
@@ -99,20 +99,71 @@ A session holds one game or one series. Its first request must be an init method
 
 | method | params | result |
 |---|---|---|
-| `start_game` (init) | `white`, `black`, `games`=1, `alternate`=true, `fen`, `move_timeout_s`=5, `max_attempts`=5, `max_plies`=500, `seed` | `{sid}`. Spawns the bots and begins play in the background. |
-| `load` (init) | `name`, `play`=false | `{sid}`. Restores a save with its bots and settings. Phase stays `stopped` unless `play` is true. The save file is never modified. |
-| `status` | none | `sid`, `pid`, `uptime_s`, `phase`, `game_id`, `game_index`, `games`, `score`, `players`, `bots` (name, color, pid, alive). |
-| `state` | none | `game_id`, `fen`, `turn`, `ply`, `legal_moves`, `last_move`, `outcome`. |
-| `history` | `game_id` (optional) | `game_id`, `players`, `initial_fen`, `moves` (`ply`, `side`, `uci`, `san`, `think_s`), `rejected` (`ply`, `side`, `move`, `reason`), `outcome`. |
+| `start_game` (init) | `white`, `black`, `games`=1, `alternate`=true, `fen`, `move_timeout_s`=5, `seat_timeout_s`, `max_attempts`=5, `max_plies`=500, `seed` | `{sid}`. Spawns the bots and begins play in the background. `min_ply_s`=0 is the pace. Also takes the lifetime params. |
+| `load` (init) | `name`, `play`=false | `{sid}`. Restores a save with its bots, settings and labels. Phase stays `stopped` unless `play` is true. The save file is never modified. Also takes the lifetime params. |
+| `status` | none | `sid`, `pid`, `uptime_s`, `phase`, `watchers`, `game_id`, `game_index`, `games`, `score`, `min_ply_s`, `labels`, `bots` (name, color, pid, alive, external). |
+| `state` | none | `game_id`, `fen`, `turn`, `ply`, `legal_moves`, `last_move`, `outcome`, `awaiting`. |
+| `history` | `game_id` (optional), `fens`=false | `game_id`, `players`, `initial_fen`, `moves` (`ply`, `side`, `uci`, `san`, `think_s`, and `fen` after the move when `fens`), `rejected` (`ply`, `side`, `move`, `reason`), `outcome`. |
 | `stop` | none | `{phase}`. Halts play after the move in flight. |
 | `resume` | none | `{phase}`. Continues a `stopped` session. |
 | `save` | `name`, `overwrite`=false | `{path}`. Writes `data/chess/saves/<name>.json` and `<name>.pgn`. |
 | `list_saves` | none | `{saves}`, the save names. |
+| `submit_move` | `color`, `game_id`, `ply`, `move` | `{accepted: true, san}`, or `{accepted: false, reason, legal_moves}`. Plays an external seat's move. |
+| `resign` | `color` | `{result, reason}`. Resigns the current game for an external seat, on either turn and in any phase. |
+| `set_pace` | `min_ply_s` | `{min_ply_s}`. Changes the pace at once, including a hold in progress. |
+| `step` | none | `{phase, ply}`. Plays exactly one ply from `stopped`, without the pace hold. Fails with `busy` when an external seat is to move. |
+| `watch` | `since_seq` (optional) | `{seq, events, snapshot}`, then event frames. See *Watch stream*. |
 | `shutdown` | none | `{}`. Ends play, sends `bye` to the bots, removes the session directory, and exits the process. |
 
 `phase` is one of `idle` (before init), `running`, `stopped`, or `finished`.
 
-A save name matches `[A-Za-z0-9_.-]+`.
+A save name matches `[A-Za-z0-9_.-]+`. Names that start with `autosave-` are reserved for the daemon.
+
+`awaiting` is the open move request, or null: `slot`, `color`, `seat`, `external`, `game_id`, `ply`, `since` (epoch seconds).
+
+### External seats
+
+A player name that matches `@[a-z0-9_]+` is an external seat. No process is spawned for it. A person or an agent plays it with `submit_move`, which names the open request by `game_id` and `ply`.
+
+- `seat_timeout_s` is the time limit per slot, `[slot0, slot1]`. Slot 0 is `white` in the first game. Keys are slots because `alternate` swaps colors. It defaults to `move_timeout_s` for a bot and null (no limit) for an external seat. A bot slot must have a limit.
+- An invalid submitted move is recorded in `rejected` and never counts toward `max_attempts`.
+- `stop` ends an external seat's open request at once. `resume` opens it again. For a bot seat `stop` still waits for the move in flight.
+
+### Session lifetime
+
+Both init methods take these optional params. Without them a session runs until `shutdown`.
+
+- `labels`: up to 16 keys matching `[a-z][a-z0-9_]*`, each mapped to a string. `status` echoes them and saves keep them. `load` merges its labels over the saved ones. A client uses labels to find its own sessions again.
+- `idle_timeout_s`: the session saves itself as `autosave-<sid>` and shuts down after this long without a control call or a watcher. Only a session that waits counts as idle: a stopped one, or one with an external seat. A running bot series is never idle.
+- `finished_linger_s`: a finished session shuts down after this long without a control call or a watcher.
+
+The daemon enforces both timeouts, so they hold when no client is connected.
+
+### Pace
+
+`min_ply_s` holds a bot's landed move until that many seconds have passed since the previous ply. The bot's think time counts toward the hold, and the hold never shortens or extends a move deadline. Moves from external seats are not held. `stop` and `resign` end a hold at once.
+
+### Watch stream
+
+`watch` subscribes to the session's events. The response is followed by one frame per event, `{"event", "seq", "data"}`, until either side closes. `seq` increases by one per event within a daemon's life.
+
+The response carries `seq`, the number of the last event already covered, plus exactly one of:
+
+- `events`: the missed events after `since_seq`, when all of them are still buffered.
+- `snapshot`: `{status, state, history}` at `seq`, when `since_seq` is absent or its events are gone.
+
+A watcher that falls too far behind gets one `resync` frame and the server closes the connection. Watch again without `since_seq`.
+
+| event | data |
+|---|---|
+| `phase` | `phase`, `note` |
+| `game_start` | `game_id`, `index`, `players`, `white_slot`, `initial_fen` |
+| `turn` | The `awaiting` fields, plus `fen`, `legal_moves`, `deadline_s`. Sent for bots and external seats. |
+| `move` | `game_id`, `ply`, `side`, `uci`, `san`, `fen`, `think_s` |
+| `rejected` | `game_id`, `ply`, `side`, `move`, `reason` |
+| `game_over` | `game_id`, `result`, `reason`, `plies`, `score` |
+| `pace` | `min_ply_s` |
+| `resync` | none |
 
 ### Error codes
 
@@ -127,3 +178,5 @@ A save name matches `[A-Za-z0-9_.-]+`.
 | `bot_failed` | A bot did not start or did not send `ready`. |
 | `unknown_method` | The method name is not in the table above. |
 | `internal` | The game master raised an unexpected error. |
+| `not_your_turn` | `submit_move` names a color with no open request, or a bot's color. |
+| `stale` | `submit_move` names a `game_id` or `ply` that is not the position in play. |

@@ -6,9 +6,16 @@ import secrets
 import string
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(os.environ.get("CHESS_ARENA_ROOT", Path(__file__).resolve().parents[3])).resolve()
 SRC = REPO_ROOT / "src" / "chess"
 ENVS = REPO_ROOT / "envs"
+
+# Daemons and bots start from the source tree, so a non-editable install cannot work.
+if not (SRC / "game_master" / "daemon.py").is_file():
+    raise RuntimeError(
+        f"chess arena source tree not found at {SRC}; "
+        "install the arena editable or set CHESS_ARENA_ROOT to its checkout"
+    )
 
 DATA = Path(os.environ.get("CHESS_ARENA_DATA", REPO_ROOT / "data" / "chess"))
 SAVES = DATA / "saves"
@@ -28,6 +35,18 @@ def session_dir(sid: str) -> Path:
 
 def records_dir(sid: str) -> Path:
     return SESSION_RECORDS / sid
+
+
+def child_env(**extra: str) -> dict[str, str]:
+    """Environment for a daemon or bot, pinned to this process's source tree and data."""
+    return dict(
+        os.environ,
+        PYTHONPATH=str(SRC),
+        CHESS_ARENA_ROOT=str(REPO_ROOT),
+        CHESS_ARENA_DATA=str(DATA),
+        CHESS_ARENA_RUNTIME=str(RUNTIME),
+        **extra,
+    )
 
 
 def mint_sid() -> str:

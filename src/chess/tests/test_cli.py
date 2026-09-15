@@ -6,7 +6,7 @@ import subprocess
 import sys
 import time
 
-from game_master import paths
+from game_master import paths, saves
 
 
 def cli(*args, check=True):
@@ -71,7 +71,32 @@ def test_start_save_load_kill_leaves_nothing_behind():
     assert not _session_dirs()
     assert cli_json("ls") == {"sessions": []}
     assert (paths.records_dir(sid) / "gm.log").is_file()
+    assert saves.read_record(sid)["sid"] == sid
+    assert sid in [s["name"] for s in saves.record_summaries()]
     assert cli("status", sid, check=False).returncode == 3
+
+
+def _wait_awaiting(sid, ply):
+    deadline = time.monotonic() + 20
+    while not ((state := cli_json("state", sid))["awaiting"] and state["ply"] == ply):
+        assert time.monotonic() < deadline
+        time.sleep(0.1)
+    return state
+
+
+def test_external_seat_from_the_cli():
+    sid = cli("start", "--white", "@human", "--black", "naive", "--pace", "0.2").stdout.strip()
+    try:
+        _wait_awaiting(sid, 0)
+        assert cli("step", sid, check=False).returncode == 1
+        assert cli("pace", sid, "0").stdout.strip() == "0s"
+        assert cli("move", sid, "e2e4").stdout.strip() == "e4"
+        _wait_awaiting(sid, 2)
+        rejected = cli("move", sid, "e2e4", check=False)
+        assert rejected.returncode == 1 and "illegal" in rejected.stderr
+        assert cli("resign", sid, "--color", "white").stdout.strip() == "0-1 (resignation)"
+    finally:
+        cli("kill", sid)
 
 
 def test_start_with_unknown_bot_leaves_no_session():

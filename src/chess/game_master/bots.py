@@ -78,6 +78,8 @@ class FrameLog:
 class BotProcess:
     """One bot process and its connection. Inbound frames queue up in `inbox`."""
 
+    external = False
+
     def __init__(
         self,
         slot: int,
@@ -114,7 +116,7 @@ class BotProcess:
         cmd = bot_command(self.name) + ["--socket", str(self.socket_path), "--name", self.name]
         if self.seed is not None:
             cmd += ["--seed", str(self.seed)]
-        env = dict(os.environ, PYTHONPATH=str(paths.SRC), PYTHONUNBUFFERED="1")
+        env = paths.child_env(PYTHONUNBUFFERED="1")
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("ab") as log_file:
             self.proc = await asyncio.create_subprocess_exec(

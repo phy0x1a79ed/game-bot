@@ -27,6 +27,7 @@ from coms.protocol import (
 from game_master import paths
 from game_master.bots import BotProcess, FrameLog
 from game_master.match import Match, Settings
+from game_master.seats import ExternalSeat
 
 Action = Callable[[Any, MoveRequest | MoveRejected], Awaitable[None]]
 
@@ -116,8 +117,11 @@ class ScriptedBot:
 
 
 @contextlib.asynccontextmanager
-async def running_match(white, black, **settings: Any):
-    """Yield a `Match` between two in-process bots (`ScriptedBot` or `coms.bot.Bot`)."""
+async def running_match(white, black, emit=None, **settings: Any):
+    """Yield a `Match` between two in-process bots (`ScriptedBot` or `coms.bot.Bot`).
+
+    A string such as `"@human"` takes that slot as an external seat.
+    """
     runtime = short_dir()
     records = runtime / "records"
     frames = FrameLog(records / "frames.jsonl")
@@ -125,6 +129,9 @@ async def running_match(white, black, **settings: Any):
     servers: list[asyncio.Task] = []
     try:
         for slot, bot in enumerate((white, black)):
+            if isinstance(bot, str):
+                bots.append(ExternalSeat(slot, bot, frames))
+                continue
             color = "white" if slot == 0 else "black"
             path = runtime / f"{color}.sock"
             servers.append(asyncio.create_task(bot.serve(path)))
@@ -132,8 +139,9 @@ async def running_match(white, black, **settings: Any):
                                  "tests", color)
             await process.handshake(asyncio.shield(servers[-1]))
             bots.append(process)
-        params = {"white": white.name, "black": black.name, **settings}
-        match = Match("tests", Settings.from_params(params), bots, records)
+        params = {"white": getattr(white, "name", white), "black": getattr(black, "name", black),
+                  **settings}
+        match = Match("tests", Settings.from_params(params), bots, records, emit)
         yield match
         await match.shutdown()
         await asyncio.wait_for(asyncio.gather(*servers), 5)
@@ -143,6 +151,16 @@ async def running_match(white, black, **settings: Any):
         await asyncio.gather(*servers, return_exceptions=True)
         frames.close()
         shutil.rmtree(runtime, ignore_errors=True)
+
+
+async def wait_awaiting(match: Match, ply: int, timeout: float = 5.0) -> dict[str, Any]:
+    """Wait until the match has an open move request at `ply` and return it."""
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while not (match.awaiting and match.awaiting["ply"] == ply):
+        assert loop.time() < deadline, f"no move request at ply {ply}"
+        await asyncio.sleep(0.01)
+    return match.awaiting
 
 
 async def settle(match: Match, timeout: float = 30.0) -> str:

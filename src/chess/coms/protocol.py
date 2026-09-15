@@ -43,6 +43,8 @@ ERROR_CODES = frozenset(
         "bot_failed",
         "unknown_method",
         "internal",
+        "not_your_turn",
+        "stale",
     }
 )
 
@@ -84,7 +86,7 @@ class GameStart(Message):
     color: str
     opponent: str
     initial_fen: str
-    move_timeout_s: float
+    move_timeout_s: float | None
     max_attempts: int
 
 
@@ -95,7 +97,7 @@ class MoveRequest(Message):
     fen: str
     moves: list[str]
     legal_moves: list[str]
-    deadline_s: float
+    deadline_s: float | None
 
 
 @_message("move_rejected")
@@ -216,6 +218,11 @@ CONTROL_METHODS = frozenset(
         "load",
         "list_saves",
         "shutdown",
+        "submit_move",
+        "resign",
+        "watch",
+        "set_pace",
+        "step",
     }
 )
 INIT_METHODS = frozenset({"start_game", "load"})
