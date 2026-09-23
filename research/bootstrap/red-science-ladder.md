@@ -45,16 +45,25 @@ needs a chest to accumulate into.
 
 A module is the unit of work. Build modules, not scattered entities.
 
-**Coal module** — drill outputs into a chest. A burner inserter returns coal
-from that chest to the drill's fuel slot. Cost 12 iron plate, 5 stone, 2 wood.
-Yields 12.75 coal/min net of its own burn.
+**Coal ring** — four coal modules in a closed loop. Each drill outputs into its
+own chest. A burner inserter moves coal from that chest into the fuel slot of the
+next drill around the ring. A chest cannot sit in line between a drill and that
+same drill's fuel slot, so each drill feeds its neighbour instead. Built at
+(68,-42) east, (72,-42) south, (72,-38) west, (68,-38) north. Chests at
+(69.5,-42.5) (72.5,-40.5) (70.5,-37.5) (67.5,-39.5). Inserters at (70.5,-42.5)
+(72.5,-39.5) (69.5,-37.5) (67.5,-40.5). Per module: 17 iron plate, 5 stone.
+Primed with 4 coal per drill and 1 per inserter, it ran unattended.
+
+**CAUTION** The ring encloses its 2×2 center. A seat that walks into the
+center is trapped. Remove one inserter to leave.
 
 **Ore module** — drill outputs ore into a furnace. One chest holds coal. Two
 burner inserters feed the drill's fuel slot and the furnace's fuel slot. Cost 15
 iron plate, 10 stone, 2 wood. Yields 15 plates/min. Burns 3.6 coal/min.
 
-**Stone module** — drill outputs into a chest. A burner inserter returns coal to
-the drill. Cost 12 iron plate, 5 stone, 2 wood. Yields 15 stone/min.
+**Stone module** — drill at (60,-30) facing north, output to an iron chest at
+(59.5,-31.5). Fuelled by hand from the ring. One 50-coal load mines about 330
+stone, which covers every stone need through step 7.
 
 The drill is the limit in an ore module. A burner mining drill mines 0.25/s = 15
 ore/min. A stone furnace smelts an iron plate in 3.2 s = 18.75 plates/min.
@@ -164,6 +173,12 @@ player takes, not a cheat.
   minutes on it. A burner mining drill runs 22 minutes. A wooden chest holds 800
   coal, which is why every module carries one.
 - A seat carries 80 inventory slots.
+- A burner inserter's `direction` names its **pickup** side. It drops on the
+  opposite side. To drop east, build it facing west.
+- Trees here are `dead-tree-desert` and yield 1 wood each. Build iron chests
+  (8 iron plate), not wooden chests. Keep wood for power poles.
+- The freeplay crash site held 8 iron plates in total. Mining a wreck yields
+  nothing.
 
 ## References
 
