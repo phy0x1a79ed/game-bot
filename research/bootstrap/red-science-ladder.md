@@ -75,14 +75,30 @@ A coal drill nets 12.75 coal/min. **Build 4 coal modules.** They net 51 coal/min
 
 The sizing rule to reuse: **one coal drill sustains 3.5 ore modules.**
 
+## Survey results (2026-09-23)
+
+| Resource | Nearest tile | Patch bounding box | Notes |
+|---|---|---|---|
+| Iron ore | (-25,-44) at the iron line | (-246,-153)–(-11,75) | about 1M ore near the line |
+| Coal | (64,-36) | (64,-76)–(214,-27) | 88 tiles east of the iron line |
+| Stone | (64,-35) | (54,-37)–(69,-23) | overlaps the coal patch edge |
+| Copper ore | (22,50) | (6,50)–(32,73) | about 100 tiles south-east of the iron line |
+| Water | (-52,-7) | — | 46 tiles from the iron line, 118 from coal |
+
+Coal and stone share one site. Build the coal and stone modules together.
+Water is nearest the iron line. Put the power block there, not at the coal
+patch, and carry its coal until step 14.
+
+**CAUTION** `lib/find-resources.sh` measures from the first character on the
+surface, not from the seat. A human in the world can be that character. Query
+against the bound `player` in `exec-lua` instead.
+
 ## Build order
 
 Stone comes second, ahead of iron. Eight iron modules need 80 stone. Automating
 stone first costs 5 stone and avoids hand-mining about 75.
 
-1. **Survey.** Run `lib/find-resources.sh`. Record the copper patch, the stone
-   patch, and the nearest water to the coal patch. Water position decides where
-   the power block goes.
+1. **Survey.** Done 2026-09-23. See *Survey results*.
 2. **Coal ×4.** Retrofit the two existing drills with a chest and a burner
    inserter each. Add two drills. Cost 30 iron plate, 10 stone, 8 wood.
 3. **Stone ×1.** Cost 12 iron plate, 5 stone, 2 wood. Manual stone mining ends.
