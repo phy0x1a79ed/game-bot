@@ -1,8 +1,8 @@
-# stage-one — bulk iron/copper via drill-fed furnace lines (in progress)
+# stage-one — bulk iron/copper via drill-fed furnace lines (superseded)
 
-Target doc, written before playing it, unlike the proven write-ups under
-`research/basic/tech/`. Once complete, replace the plan below with the
-actual layout, coordinates, and throughput.
+**Superseded by `red-science-ladder.md`**, which sizes the build from measured
+consumption rates instead of by feel. Keep this file for the coordinates and the
+gotchas recorded below.
 
 ## Status (session 2026-09-22, world seed 1234567)
 
