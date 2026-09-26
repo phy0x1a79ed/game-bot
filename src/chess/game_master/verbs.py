@@ -31,7 +31,7 @@ class VerbError(Exception):
         self.message = message
 
 
-def _sid(args: dict[str, Any]) -> str:
+def session_id(args: dict[str, Any]) -> str:
     sid = str(args.get("session_id") or "")
     if not paths.SID_RE.match(sid):
         raise VerbError("invalid_params", f"bad session_id {sid!r}")
@@ -95,14 +95,14 @@ async def _create(method: str, params: dict[str, Any], start_params: dict[str, A
 
 
 async def kill(args: dict[str, Any]) -> dict[str, Any]:
-    sid = _sid(args)
+    sid = session_id(args)
     await sessions.kill(sid)
     return {"killed": True, "session_id": sid}
 
 
 async def rematch(args: dict[str, Any]) -> dict[str, Any]:
     """End the session and start a new one with the same players and settings."""
-    sid = _sid(args)
+    sid = session_id(args)
     try:
         saved = json.loads((paths.records_dir(sid) / START_FILE).read_text())
     except (OSError, ValueError) as exc:
@@ -117,7 +117,7 @@ async def rematch(args: dict[str, Any]) -> dict[str, Any]:
 async def status(args: dict[str, Any]) -> dict[str, Any]:
     """Status of one session, or of every live session on this host."""
     if args.get("session_id"):
-        return {"sessions": [await _call(_sid(args), "status")]}
+        return {"sessions": [await _call(session_id(args), "status")]}
     found = await asyncio.gather(*(_status_or_none(sid) for sid in sessions.live_sessions()))
     return {"sessions": [s for s in found if s]}
 
@@ -132,19 +132,19 @@ async def _status_or_none(sid: str) -> dict[str, Any] | None:
 # ---- perceive ----
 
 async def observe(args: dict[str, Any]) -> dict[str, Any]:
-    sid = _sid(args)
+    sid = session_id(args)
     status_, state = await asyncio.gather(_call(sid, "status"), _call(sid, "state"))
     return {"status": status_, "state": state}
 
 
 async def history(args: dict[str, Any]) -> dict[str, Any]:
     params = {k: args[k] for k in ("game_id", "fens") if args.get(k) is not None}
-    return await _call(_sid(args), "history", params)
+    return await _call(session_id(args), "history", params)
 
 
 async def snapshot(args: dict[str, Any]) -> dict[str, Any]:
     """`{seq, snapshot}` of a session, for a view that starts or resyncs."""
-    sid = _sid(args)
+    sid = session_id(args)
     try:
         async with sessions.watch(sid) as (result, _frames):
             return result
@@ -171,7 +171,7 @@ async def replay(args: dict[str, Any]) -> dict[str, Any]:
     if bool(name) == bool(args.get("session_id")):
         raise VerbError("invalid_params", "pass exactly one of name and session_id")
     try:
-        data = saves.read(str(name)) if name else saves.read_record(_sid(args))
+        data = saves.read(str(name)) if name else saves.read_record(session_id(args))
         return saves.replay(data, args.get("game_id"))
     except (FileNotFoundError, LookupError) as exc:
         raise VerbError("not_found", str(exc)) from exc
@@ -183,7 +183,7 @@ async def replay(args: dict[str, Any]) -> dict[str, Any]:
 
 async def move(args: dict[str, Any]) -> dict[str, Any]:
     """Play a move for the external seat to move. `ply` guards against a stale view."""
-    sid = _sid(args)
+    sid = session_id(args)
     waiting = (await _call(sid, "state"))["awaiting"]
     if not (waiting and waiting["external"]):
         raise VerbError("not_your_turn", "no external seat is to move")
@@ -198,7 +198,7 @@ async def move(args: dict[str, Any]) -> dict[str, Any]:
 
 
 async def resign(args: dict[str, Any]) -> dict[str, Any]:
-    sid = _sid(args)
+    sid = session_id(args)
     color = args.get("color")
     if not color:
         external = [b["color"] for b in (await _call(sid, "status"))["bots"] if b["external"]]
@@ -211,13 +211,13 @@ async def resign(args: dict[str, Any]) -> dict[str, Any]:
 def _control(method: str, *keys: str, timeout: float = 30.0):
     async def handler(args: dict[str, Any]) -> Any:
         params = {k: args[k] for k in keys if args.get(k) is not None}
-        return await _call(_sid(args), method, params, timeout)
+        return await _call(session_id(args), method, params, timeout)
     return handler
 
 
 async def save(args: dict[str, Any]) -> dict[str, Any]:
     params = {"name": args.get("name"), "overwrite": bool(args.get("overwrite", False))}
-    return await _call(_sid(args), "save", params)
+    return await _call(session_id(args), "save", params)
 
 
 VERBS: dict[str, Callable[[dict[str, Any]], Awaitable[Any]]] = {

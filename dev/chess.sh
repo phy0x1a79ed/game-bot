@@ -2,6 +2,7 @@
 # Chess arena entry point.
 #   chess.sh env              create or update the conda envs from envs/
 #   chess.sh test [pytest args]
+#   chess.sh ui [--port N]    serve the browser viewer on 127.0.0.1
 #   chess.sh <command> ...    session CLI; see `chess.sh --help`
 set -euo pipefail
 
@@ -28,6 +29,10 @@ case "${1:-}" in
         shift
         cd "$ROOT"
         exec mamba run --no-capture-output -n chess python -m pytest src/chess/tests "$@"
+        ;;
+    ui)
+        shift
+        exec mamba run --no-capture-output -n chess python -m viewer "$@"
         ;;
     *)
         exec mamba run --no-capture-output -n chess python -m game_master.cli "$@"
