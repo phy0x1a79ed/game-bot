@@ -81,6 +81,10 @@ Builder rules:
 - A service pass that loads coal once runs dry before its last stop. The iron
   column alone took 240 coal a pass, so the copper modules after it starved.
   Refill coal before each section of a route.
+- A background service loop dies without a sign. `upkeep.sh` stopped at
+  14:09 and 14 machines ran dry before the alerts showed it. Run every loop
+  under a restart wrapper. `lib/alerts.sh` flags `UPKEEP-STALE` when the
+  upkeep log is 15 minutes old.
 - Give every fuelled machine an owner lane. The boiler belonged to no lane and
   ran dry at tick 640000 with its feed chest empty. The supervisor assigns each
   new machine to a lane's service script when it is built.
@@ -111,6 +115,13 @@ parallel took 2.7 seconds against 6.6 in series.
    wait for a walk, a mining order or a craft to finish. Walk between stops
    from the outer script. Reach is 10.5 tiles, so one stop covers several
    modules.
+   **CAUTION** `mine` picks its target by radius. Read the neighbour's
+   `bounding_box` before mining near it. A lab spans 3 tiles, and a point that
+   looked outside it mined the lab.
+   **CAUTION** `mine` does not batch. Each call clears the previous mining
+   order in the same tick, so only the last `mine` in one `exec_lua` runs.
+   Mine one entity per call, about 3 seconds apart. `build`, `insert`, `take`
+   and `craft` batch fine.
 3. Walk with `lib/walk.sh SEAT X Y [TOL]`. It blocks until arrival and retries
    a blocked path.
 4. Read many entities with one `exec_lua` query. `lib/status.lua` summarises
@@ -139,9 +150,36 @@ reloaded tick 415000 and played defense-first with scripted actions.
 | `logistic-science-pack` researched | never | ~640000 |
 | Green packs made unattended, not yet belted to the labs | never | ~792000 |
 | Iron column on 7 electric drills, no drill fuel | never | ~811000 |
+| Labs research on green packs (`electric-energy-distribution-1`) | never | ~893000 |
 
-Since tick 641000 a belt carries iron from the 5 self-fed iron rows to the gear
-assembler. Copper still arrives by hand, through `lib/service-copper.sh`.
+**State at tick 919000** (save `run2-session-end-t919k`, world paused):
+
+- Iron: 7 electric drills on the column, all rows dropping onto the iron belt.
+  A splitter at (-19,-8.5) sends overflow to the future iron B lane.
+- Copper: 8 burner modules on the rich core, each into its own chest. The
+  copper lane's base end feeds both red copper chests and the mall row's
+  copper chest. Its collector through the copper field is not built, so
+  `lib/upkeep.sh` still hauls copper.
+- Power: 1 boiler, 2 engines, 664 kW of 1800 kW used.
+- Science: red runs unattended. The green line makes packs, but two of its
+  feed chests are hand-stocked. Only lab 3 receives green.
+  `electric-energy-distribution-1` is under way.
+- Coal: 2 feeder chains drop coal onto a belt stub at (79.5,-46.5). The belt
+  to the boiler is not built.
+- Defense: 17 turrets, a stone wall at y=-71.5 with a 5-tile gap at
+  x=-34..-30. Evolution about 0.06.
+
+**Next, in order.** Each lane's handoff file holds the coordinates.
+
+1. Build the coal belt to the boiler. Reconcile its route with the bus first:
+   cross the bus underground and give iron B the row y=-6.5.
+2. Feed labs 1 and 2 with green, and automate the green line's two
+   hand-stocked feed chests.
+3. Build the copper field collector onto the copper lane, then iron B and
+   the gear and circuit spurs.
+4. Repair the damaged turrets and furnace with repair packs, and close the
+   wall gap.
+5. Build the mall row by row, from the ratio table below.
 
 **Strategy from tick 725000.** The supervisor set these after the user's review.
 
@@ -256,6 +294,15 @@ assembler. Copper still arrives by hand, through `lib/service-copper.sh`.
 - A small electric pole's wires reach 7.5 tiles, but it powers only machines
   within about 2.5 tiles of itself. A pole row along one side of a line leaves
   the far side unpowered.
+- A splitter's `splitter_output_priority` names a side relative to its
+  facing. A splitter facing south with priority `right` fills its west output
+  first. Test the side on a small rig before relying on it.
+- An underground belt reaches 5 tiles here (`max_underground_distance`).
+- CAUTION: the `build` verb always makes an underground belt an input end.
+  Build the exit with the direction opposite to the entrance: entrance north,
+  exit south, or call `.rotate()` on the exit after building it. Two ends
+  with the same direction form a dead pair that holds items forever without
+  an error.
 - A belt tile moves items only in its own facing direction. A corner does not
   turn to meet its neighbour. Set every corner's direction explicitly. Confirm
   flow by reading items on the transport line, not by build success.
@@ -387,6 +434,17 @@ entities.
   A, so the container gets B's full mining rate. A held 48 to 50 fuel and C
   held 49, so a 50-coal prime lasts hours. Chain: C (78,-50) south, A (78,-48)
   south, B (78,-46) east, container (80,-46).
+- A chain's last drill drops straight onto a belt tile. Two chains run at
+  the ring-1 patch since tick 860000: C (78,-50) south, A (78,-48) south,
+  B (78,-46) east onto belt (79.5,-46.5). C2 (78,-42) south, A2 (78,-40) south,
+  B2 (78,-38) east onto belt (79.5,-38.5). Together they make about 30
+  coal/min, enough for 2 engines at full load.
+- At tick 860000 the 2 engines supplied 664 kW of 1800 kW. The boiler burned
+  7.2 coal/min, measured from its feed chest over 24 minutes. Read
+  `energy_generated_last_tick` as joules per tick: multiply by 60 for watts.
+- The power block's interior is a sealed pocket. No new belt reaches the
+  boiler until poles (-37.5,-6.5) and (-48.5,-13.5) move 1 tile each. Leave a
+  belt-wide gap into every block you build.
 - A chain spends 3 drills for 15 coal/min. A standalone drill into a chest
   nets 12.75 coal/min when the coal run refuels it from its own chest at each
   pickup. Use standalone drills for coal a seat hauls anyway. Use chains for

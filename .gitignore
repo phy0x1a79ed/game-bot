@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 .awm/
 research/.seat
+research/**/*.log

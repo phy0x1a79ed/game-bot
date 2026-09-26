@@ -6,6 +6,9 @@ state=$(mktemp -d)
 touch "$state/prev" "$state/shown"
 while true; do
   cur=$("$dir/act.sh" exec_lua "$seat" path="$dir/alerts.lua" | jq -r '.output // empty' 2>/dev/null | sort -u)
+  if [ -f "$dir/upkeep.log" ] && [ -n "$(find "$dir/upkeep.log" -mmin +15)" ]; then
+    cur=$(printf '%s\nUPKEEP-STALE upkeep.log unchanged for 15+ min' "$cur" | sort -u)
+  fi
   if [ -n "$cur" ] || [ -s "$state/prev" ]; then
     echo "$cur" | grep -v '^$' > "$state/cur"
     comm -12 "$state/cur" "$state/prev" > "$state/stable"

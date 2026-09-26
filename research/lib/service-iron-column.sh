@@ -70,24 +70,26 @@ fi
 total_coal_in=0
 total_plates=0
 
+# 2026-09-26 14:xx: iron electrified the whole -24,y drill line (HAND_YS +
+# SELF_YS, y=-45..-63) -- electric-mining-drill needs no coal, and the
+# self-fed rows' coal chest + fuel inserter were physically removed. Only the
+# furnace and the output inserter still burn coal on these rows now.
 for y in "${HAND_YS[@]}"; do
   wy=$((y + 2))
   "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  di=$("$LIB/act.sh" insert "$seat" x=-24 y=$y name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
   fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
   oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-  total_coal_in=$((total_coal_in + di + fi + oi))
-  echo "hand-fed y=$y: drill+${di} furnace+${fi} out-inserter+${oi} coal (belt-fed, no collection)"
+  total_coal_in=$((total_coal_in + fi + oi))
+  echo "hand-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, belt-fed, no collection)"
 done
 
 for y in "${SELF_YS[@]}"; do
   wy=$((y + 2))
   "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  cw=$("$LIB/act.sh" insert "$seat" x=-27 y=$y name=coal count="$self_coal" target=iron-chest | jq -r '.inserted // 0')
   fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
   oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-  total_coal_in=$((total_coal_in + cw + fi + oi))
-  echo "self-fed y=$y: drill-chest+${cw} furnace+${fi} out-inserter+${oi} coal (belt-fed, no collection)"
+  total_coal_in=$((total_coal_in + fi + oi))
+  echo "self-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, chest/fuel-inserter removed, belt-fed, no collection)"
 done
 
 for y in "${EAST_YS[@]}"; do

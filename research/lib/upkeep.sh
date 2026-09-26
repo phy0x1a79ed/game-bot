@@ -23,7 +23,7 @@ seat=$1
 interval=${2:-600}
 [ -z "$seat" ] && { echo "usage: upkeep.sh SEAT [interval_s]"; exit 1; }
 
-COAL_FLOOR=150
+COAL_FLOOR=200
 RING_STOPS=(
   "69 -44 69.5 -42.5 60"
   "73 -40.5 72.5 -40.5 60"

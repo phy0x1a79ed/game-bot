@@ -18,6 +18,12 @@
 #   module6 (hand-fed, new): drill(18,54)/furnace(20,54),
 #     output inserter+chest at (20.5,52.5,dir=south)/(20.5,51.5) -- north side,
 #     south side collides with module 2's drill
+#   module7 (hand-fed, added by iron 2026-09-26): drill(18,66)/furnace(20,66),
+#     output inserter+chest at (20.5,67.5)/(20.5,68.5)
+#   module8 (hand-fed, added by iron 2026-09-26): drill(22,63)/furnace(24,63),
+#     output inserter+chest at (24.5,64.5)/(24.5,65.5)
+#   module9 (hand-fed, added by iron 2026-09-26): drill(24,60)/furnace(26,60),
+#     output inserter+chest at (26.5,61.5)/(26.5,62.5)
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
 coal_for_chest=${2:-0}
@@ -76,6 +82,30 @@ f=$("$LIB/act.sh" insert "$seat" x=20 y=54 name=coal count=50 target=stone-furna
 t=$("$LIB/act.sh" take "$seat" x=20.5 y=51.5 name=copper-plate target=iron-chest 2>/dev/null | jq -r '.taken // 0')
 total=$((total + t))
 echo "module6: +${d} coal drill, +${f} coal furnace, +${t} copper-plate from (20.5,51.5)"
+
+echo "== module 7 (hand-fed, drill 18,66 / furnace 20,66) =="
+d=$("$LIB/act.sh" insert "$seat" x=18 y=66 name=coal count=50 target=burner-mining-drill 2>/dev/null | jq -r '.inserted // 0')
+f=$("$LIB/act.sh" insert "$seat" x=20 y=66 name=coal count=50 target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
+"$LIB/act.sh" insert "$seat" x=20.5 y=67.5 name=coal count=20 target=burner-inserter >/dev/null 2>&1
+t=$("$LIB/act.sh" take "$seat" x=20.5 y=68.5 name=copper-plate target=iron-chest 2>/dev/null | jq -r '.taken // 0')
+total=$((total + t))
+echo "module7: +${d} coal drill, +${f} coal furnace, +${t} copper-plate from (20.5,68.5)"
+
+echo "== module 8 (hand-fed, drill 22,63 / furnace 24,63) =="
+d=$("$LIB/act.sh" insert "$seat" x=22 y=63 name=coal count=50 target=burner-mining-drill 2>/dev/null | jq -r '.inserted // 0')
+f=$("$LIB/act.sh" insert "$seat" x=24 y=63 name=coal count=50 target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
+"$LIB/act.sh" insert "$seat" x=24.5 y=64.5 name=coal count=20 target=burner-inserter >/dev/null 2>&1
+t=$("$LIB/act.sh" take "$seat" x=24.5 y=65.5 name=copper-plate target=iron-chest 2>/dev/null | jq -r '.taken // 0')
+total=$((total + t))
+echo "module8: +${d} coal drill, +${f} coal furnace, +${t} copper-plate from (24.5,65.5)"
+
+echo "== module 9 (hand-fed, drill 24,60 / furnace 26,60) =="
+d=$("$LIB/act.sh" insert "$seat" x=24 y=60 name=coal count=50 target=burner-mining-drill 2>/dev/null | jq -r '.inserted // 0')
+f=$("$LIB/act.sh" insert "$seat" x=26 y=60 name=coal count=50 target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
+"$LIB/act.sh" insert "$seat" x=26.5 y=61.5 name=coal count=20 target=burner-inserter >/dev/null 2>&1
+t=$("$LIB/act.sh" take "$seat" x=26.5 y=62.5 name=copper-plate target=iron-chest 2>/dev/null | jq -r '.taken // 0')
+total=$((total + t))
+echo "module9: +${d} coal drill, +${f} coal furnace, +${t} copper-plate from (26.5,62.5)"
 
 echo "total copper-plate collected this sweep: $total"
 
