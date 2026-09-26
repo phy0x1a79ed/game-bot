@@ -1,0 +1,33 @@
+"""The $name chess bot. Play it: dev/chess.sh match $name naive"""
+
+from coms.bot import Bot
+from coms.protocol import GameOver, GameStart, MoveRequest
+from game import GameState
+
+
+class $cls(Bot):
+    name = "$name"
+    version = "1"
+
+    def on_game_start(self, start: GameStart) -> None:
+        # Called before each game. start.color is "white" or "black".
+        pass
+
+    def choose_move(self, request: MoveRequest) -> str | None:
+        # Return one UCI move from request.legal_moves, such as "e2e4" or "e7e8q".
+        # Return None to resign. An exception also resigns, with a traceback in the bot log.
+        # Answer within request.deadline_s seconds, or the game is lost on time.
+        state = GameState.from_request(request, self.game.initial_fen)
+
+        # `state` is a private copy of the position. `state.apply(move)` returns the
+        # position after a move, so you can look ahead without touching the real game.
+        captures = [m for m in request.legal_moves if state.is_capture(m)]
+        return self.rng.choice(captures or request.legal_moves)
+
+    def on_game_over(self, over: GameOver) -> None:
+        # over.result is "1-0", "0-1" or "1/2-1/2". over.reason says why.
+        pass
+
+
+if __name__ == "__main__":
+    $cls.main()

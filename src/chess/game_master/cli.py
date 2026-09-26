@@ -2,6 +2,7 @@
 
 Each command either creates a detached session daemon (`start`, `load`) or
 sends one control request to a live session, prints the answer, and exits.
+`match` is the exception: it waits for its series to end. `new-bot` touches no session.
 """
 
 from __future__ import annotations
@@ -9,7 +10,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import string
 import sys
+import time
+from pathlib import Path
 from typing import Any
 
 from coms.protocol import RpcError
@@ -19,6 +23,20 @@ from game_master import paths, saves, sessions
 EXIT_ERROR = 1
 EXIT_USAGE = 2
 EXIT_NO_SESSION = 3
+EXIT_INTERRUPTED = 130
+
+BOT_TEMPLATE = paths.SRC / "game_master" / "bot_template.py.txt"
+VIEWER_URL = "http://127.0.0.1:8765/?sid={sid}"
+WATCH_PACE_S = 0.5
+
+# Reasons a game ends because of one bot, with what a bot author should check.
+FAULTS = {
+    "disconnect": "the bot process exited",
+    "resignation": "choose_move returned None or raised",
+    "timeout": "no move before the deadline",
+    "illegal_move": "too many invalid moves",
+    "protocol_error": "the bot sent a malformed message",
+}
 
 
 class CliError(Exception):
@@ -65,6 +83,16 @@ def _create_session(method: str, params: dict[str, Any]) -> tuple[str, Any]:
 # --- commands ---
 
 
+def _labels(pairs: list[str]) -> dict[str, str]:
+    labels = {}
+    for pair in pairs:
+        key, sep, value = pair.partition("=")
+        if not sep:
+            raise CliError(f"bad label {pair!r}; give key=value", EXIT_USAGE)
+        labels[key] = value
+    return labels
+
+
 def cmd_start(args: argparse.Namespace) -> Any:
     params = {
         "white": args.white,
@@ -76,12 +104,86 @@ def cmd_start(args: argparse.Namespace) -> Any:
         "max_plies": args.max_plies,
         "min_ply_s": args.pace,
     }
-    if args.fen is not None:
-        params["fen"] = args.fen
-    if args.seed is not None:
-        params["seed"] = args.seed
+    optional = {"fen": args.fen, "seed": args.seed, "idle_timeout_s": args.idle_timeout,
+                "finished_linger_s": args.finished_linger}
+    params |= {k: v for k, v in optional.items() if v is not None}
+    if args.label:
+        params["labels"] = _labels(args.label)
     sid, _ = _create_session("start_game", params)
     return {"sid": sid}
+
+
+def cmd_match(args: argparse.Namespace) -> Any:
+    """Play a series between two bots, wait for its end, and return every game's result."""
+    params = {"white": args.a, "black": args.b, "games": args.games, "alternate": True,
+              "move_timeout_s": args.timeout, "min_ply_s": WATCH_PACE_S if args.ui else 0.0,
+              "labels": {"owner": "match"}}
+    if args.seed is not None:
+        params["seed"] = args.seed
+    if args.ui:
+        params["finished_linger_s"] = 900.0
+    sid, _ = _create_session("start_game", params)
+    if args.ui:
+        print(f"watch: {VIEWER_URL.format(sid=sid)}  (needs `dev/chess.sh ui` running)",
+              flush=True)
+    try:
+        status = _wait_for_series(sid, args.ui)
+        games = [_game_result(sid, f"{sid}-{i}") for i in range(1, status["game_index"] + 1)]
+    except KeyboardInterrupt:
+        asyncio.run(sessions.kill(sid))
+        raise CliError(f"interrupted; killed session {sid}", EXIT_INTERRUPTED) from None
+    if not args.ui:
+        asyncio.run(sessions.kill(sid))
+    return {"sid": sid, "games": games, "note": status["note"], "score": _score(status["bots"])}
+
+
+def _score(bots: list[dict[str, Any]]) -> dict[str, float]:
+    """Points per bot, keyed by name, or by name and slot when both bots share a name."""
+    same = len({b["name"] for b in bots}) < len(bots)
+    return {f"{b['name']}[{b['slot']}]" if same else b["name"]: b["points"] for b in bots}
+
+
+def _wait_for_series(sid: str, watched: bool) -> dict[str, Any]:
+    """Poll until the series finishes. A stop from the browser only pauses the wait."""
+    while True:
+        status = _call(sid, "status")
+        if status["phase"] == "finished":
+            return status
+        if status["phase"] == "stopped" and not watched:
+            raise CliError(f"session {sid} stopped: {status['note'] or 'no reason given'}")
+        time.sleep(0.2)
+
+
+def _game_result(sid: str, game_id: str) -> dict[str, Any]:
+    h = _call(sid, "history", {"game_id": game_id})
+    outcome = h["outcome"] or {"result": "*", "reason": "unfinished"}
+    game = {"game_id": game_id, "white": h["players"]["white"], "black": h["players"]["black"],
+            "result": outcome["result"], "reason": outcome["reason"], "plies": len(h["moves"]),
+            "rejected": len(h["rejected"])}
+    if outcome["reason"] in FAULTS and outcome["result"] != "1/2-1/2":
+        loser = h["players"]["black" if outcome["result"] == "1-0" else "white"]
+        logs = sorted(paths.records_dir(sid).glob(f"bot*-{loser}.log"))
+        game["fault"] = {"bot": loser, "why": FAULTS[outcome["reason"]],
+                         "logs": [_shown(p) for p in logs]}
+    return game
+
+
+def _shown(path: Path) -> str:
+    return str(path.relative_to(Path.cwd()) if path.is_relative_to(Path.cwd()) else path)
+
+
+def cmd_new_bot(args: argparse.Namespace) -> Any:
+    name = args.name
+    if not (name.isidentifier() and name == name.lower()):
+        raise CliError(f"bad bot name {name!r}; use lowercase letters, digits and _", EXIT_USAGE)
+    folder = paths.SRC / f"ai_{name}"
+    if folder.exists():
+        raise CliError(f"{folder} already exists", EXIT_USAGE)
+    cls = "".join(part.capitalize() for part in name.split("_")) + "Bot"
+    source = string.Template(BOT_TEMPLATE.read_text()).substitute(name=name, cls=cls)
+    folder.mkdir()
+    (folder / "__main__.py").write_text(source)
+    return {"bot": name, "path": _shown(folder / "__main__.py")}
 
 
 def cmd_load(args: argparse.Namespace) -> Any:
@@ -162,7 +264,14 @@ def cmd_pace(args: argparse.Namespace) -> Any:
 
 
 def cmd_resign(args: argparse.Namespace) -> Any:
-    return _call(_resolve_sid(args.sid), "resign", {"color": args.color})
+    sid = _resolve_sid(args.sid)
+    color = args.color
+    if color is None:
+        external = [b["color"] for b in _call(sid, "status")["bots"] if b["external"]]
+        if len(external) != 1:
+            raise CliError("the session has no single external seat; pass --color", EXIT_USAGE)
+        color = external[0]
+    return _call(sid, "resign", {"color": color}, timeout=60.0)
 
 
 def cmd_kill(args: argparse.Namespace) -> Any:
@@ -183,6 +292,28 @@ def _score_line(status: dict[str, Any]) -> str:
 
 def show_start(result: dict[str, Any]) -> None:
     print(result["sid"])
+
+
+def show_match(result: dict[str, Any]) -> None:
+    for g in result["games"]:
+        plies = f"{g['plies']} ply" if g["plies"] == 1 else f"{g['plies']} plies"
+        line = (f"{g['game_id']}  {g['white']} (white) vs {g['black']} (black)  "
+                f"{g['result']:<7} {g['reason']}, {plies}")
+        if g["rejected"]:
+            line += f", {g['rejected']} invalid moves"
+        print(line)
+        if "fault" in g:
+            fault = g["fault"]
+            print(f"    {fault['bot']} lost by {g['reason']}: {fault['why']}. "
+                  f"See {' or '.join(fault['logs']) or 'its log'}")
+    if result["note"]:
+        print(f"note  {result['note']}")
+    print("score " + " - ".join(f"{name} {points:g}" for name, points in result["score"].items()))
+
+
+def show_new_bot(result: dict[str, Any]) -> None:
+    print(f"created {result['path']}")
+    print(f"play it: dev/chess.sh match {result['bot']} naive")
 
 
 def show_ls(result: dict[str, Any]) -> None:
@@ -278,6 +409,8 @@ def show_pace(result: dict[str, Any]) -> None:
 
 COMMANDS = {
     "start": (cmd_start, show_start),
+    "match": (cmd_match, show_match),
+    "new-bot": (cmd_new_bot, show_new_bot),
     "load": (cmd_load, show_start),
     "ls": (cmd_ls, show_ls),
     "saves": (cmd_saves, show_saves),
@@ -313,6 +446,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--max-plies", type=int, default=500)
     p.add_argument("--seed", type=int, default=None)
     p.add_argument("--pace", type=float, default=0.0, help="minimum seconds between bot plies")
+    p.add_argument("--label", action="append", metavar="KEY=VALUE",
+                   help="tag the session; repeat for more labels")
+    p.add_argument("--idle-timeout", type=float, default=None,
+                   help="save and exit after this many seconds with no control calls")
+    p.add_argument("--finished-linger", type=float, default=None,
+                   help="exit this many seconds after the series finishes")
+
+    p = sub.add_parser("match", parents=[common],
+                       help="play two bots, wait for the series to end, and print the score")
+    p.add_argument("a", help="bot name; plays white in odd games")
+    p.add_argument("b", help="bot name; plays white in even games")
+    p.add_argument("--games", type=int, default=2)
+    p.add_argument("--seed", type=int, default=None)
+    p.add_argument("--timeout", type=float, default=5.0, help="seconds per move")
+    p.add_argument("--ui", action="store_true",
+                   help=f"play at {WATCH_PACE_S:g}s per ply and print the viewer URL")
+
+    p = sub.add_parser("new-bot", parents=[common], help="create src/chess/ai_<name> from a template")
+    p.add_argument("name")
 
     p = sub.add_parser("load", parents=[common], help="load a save into a new session")
     p.add_argument("name")
@@ -349,7 +501,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("resign", parents=[common], help="resign the current game for an external seat")
     p.add_argument("sid", nargs="?")
-    p.add_argument("--color", required=True, choices=["white", "black"])
+    p.add_argument("--color", choices=["white", "black"],
+                   help="needed only when both seats are external")
     return parser
 
 
