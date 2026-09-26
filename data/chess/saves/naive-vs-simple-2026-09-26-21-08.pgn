@@ -1,0 +1,10 @@
+[Event "arena sz6ay"]
+[Site "local"]
+[Date "2026.09.26"]
+[Round "1"]
+[White "naive"]
+[Black "simple"]
+[Result "0-1"]
+[Termination "checkmate"]
+
+1. a3 e6 2. f3 c5 3. e4 Nc6 4. Qe2 Nd4 5. Qb5 Nxb5 6. Be2 Qh4+ 7. Kd1 Nd6 8. g4 Ke7 9. d3 e5 10. h3 b6 11. f4 exf4 12. Ra2 Qf6 13. Nc3 Kd8 14. b4 Qxc3 15. a4 cxb4 16. Bxf4 Ne8 17. Bd6 Nxd6 18. Bf3 Ke8 19. Ke2 f6 20. Ra3 bxa3 21. h4 Qxc2+ 22. Ke3 Qxa4 23. Nh3 Qb3 24. Rf1 Qb5 25. Bh1 Qc5+ 26. Kf3 Qb4 27. Ra1 f5 28. Kf2 Qb2+ 29. Ke1 Qxa1+ 30. Kf2 Qxh1 31. Ke2 Qxh3 32. Kd1 Qxg4+ 33. Kc2 Qe2+ 34. Kb1 Qb2# 0-1
