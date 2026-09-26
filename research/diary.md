@@ -78,6 +78,9 @@ Builder rules:
 - Leave at least 20 coal in every coal ring chest. Never walk into a ring's
   centre.
 - Put surplus for other lanes in the shared depot chest at (0.5,-19.5).
+- A service pass that loads coal once runs dry before its last stop. The iron
+  column alone took 240 coal a pass, so the copper modules after it starved.
+  Refill coal before each section of a route.
 - Give every fuelled machine an owner lane. The boiler belonged to no lane and
   ran dry at tick 640000 with its feed chest empty. The supervisor assigns each
   new machine to a lane's service script when it is built.
@@ -135,6 +138,7 @@ reloaded tick 415000 and played defense-first with scripted actions.
 | Red science automated, labs unattended | never | ~585000 |
 | `logistic-science-pack` researched | never | ~640000 |
 | Green packs made unattended, not yet belted to the labs | never | ~792000 |
+| Iron column on 7 electric drills, no drill fuel | never | ~811000 |
 
 Since tick 641000 a belt carries iron from the 5 self-fed iron rows to the gear
 assembler. Copper still arrives by hand, through `lib/service-copper.sh`.
@@ -268,6 +272,23 @@ assembler. Copper still arrives by hand, through `lib/service-copper.sh`.
   reported healthy. The status script now lists starved assemblers and labs
   as `STARVED:`. Name the science input chests first in the iron service
   route, ahead of the depot.
+
+**Assembler ratios** (recipes read live at tick 808000, assembling-machine-1
+at speed 0.5, assembling-machine-2 at 0.75)
+
+| Block | AM1 rate | Notes |
+|---|---|---|
+| Gears | 60/min per assembler, 120 iron/min in | AM2: 90/min |
+| Circuits | 3 cable : 2 circuit assemblers = 120/min, 120 iron + 180 copper/min in | ratio holds for AM2 |
+| Green pack | 5/min per assembler | 1 belt assembler and 1 inserter assembler serve 4 pack assemblers |
+| Red pack | 6/min per assembler | |
+
+- Two assemblers 4 tiles apart chain through one inserter between them.
+- A 1:1 cable-to-circuit pair made 17 circuits/min, not 60. One inserter cannot
+  clear the cable assembler's 2-per-craft output. Build the 3:2 block.
+- The mall needs local chains for 3 items: small poles take cable, stone
+  furnaces and walls take stone or brick, and a burner drill takes a stone
+  furnace.
 
 **Machine inventories decide where an inserter pays** (measured tick 540000)
 

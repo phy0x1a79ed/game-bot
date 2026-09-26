@@ -20,11 +20,11 @@ end
 -- the long haul from the coal patch which arrives via y=-21.5).
 -- goal: (-46.5,-8.5), the open tile immediately EAST of the feed chest (-47.5,-8.5).
 local sx, sy = -58, -21
-local gx, gy = -21, -21  -- sanity check target first: near the iron belt corridor, same latitude
+local gx, gy = -47, -9
 
-p('open[start]=' .. tostring(open[idx(sx,sy)]) .. ' open[sanity-goal]=' .. tostring(open[idx(gx,gy)]))
-local water_here = surf.get_tile(sx+0.5, sy+0.5).name
-p('tile name at start: ' .. water_here)
+-- open the one identified choke point (small-electric-pole @ -48.5,-13.5 relocated 1 tile)
+-- grid cell whose tile-centre is (-48.5,-13.5): x+0.5=-48.5,y+0.5=-13.5 -> x=-49,y=-14
+open[idx(-49,-14)] = true
 
 if not open[idx(sx,sy)] then p('START BLOCKED') end
 if not open[idx(gx,gy)] then p('GOAL BLOCKED') end

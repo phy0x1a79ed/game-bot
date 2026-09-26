@@ -7,7 +7,8 @@
 set -u
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1; y=$2; mode=$3
-sy=$(echo "$y - 0.5" | bc)
+sy=$(echo "$y - 0.5" | bc)   # new electric-drill row (south side)
+fy=$(echo "$y + 0.5" | bc)   # self-feed coal-chest/fuel-inserter row (north side)
 
 tmp1=$(mktemp /tmp/rowcheck.XXXXXX.lua)
 cat > "$tmp1" <<EOF
@@ -21,16 +22,19 @@ rm -f "$tmp1"
 echo "enemies: ${enemies:-0}"
 if [ "${enemies:-0}" != "0" ]; then echo "ABORT row $y: enemies detected"; exit 1; fi
 
-"$LIB/walk.sh" "$seat" -24 "$sy" 4 >/dev/null
+# stand off to the side (x=-21) so the seat's own body doesn't block the
+# electric drill's half-integer build spot at (-24.5,sy) -- confirmed by a
+# live collision at row -48 when standing at (-24,sy) within ~1 tile.
+"$LIB/walk.sh" "$seat" -21 "$sy" 2 >/dev/null
 
 if [ "$mode" = "self" ] || [ "$mode" = "hand" ]; then
   echo "-- mining burner-mining-drill(-24,$y) --"
   "$LIB/act.sh" mine "$seat" x=-24 y=$y
 fi
 if [ "$mode" = "self" ] || [ "$mode" = "rebuild" ]; then
-  echo "-- mining fuel-inserter(-25.5,$sy) + coal-chest(-26.5,$sy) if present --"
-  "$LIB/act.sh" mine "$seat" x=-25.5 y=$sy 2>&1 | grep -v '^$' || true
-  "$LIB/act.sh" mine "$seat" x=-26.5 y=$sy 2>&1 | grep -v '^$' || true
+  echo "-- mining fuel-inserter(-25.5,$fy) + coal-chest(-26.5,$fy) if present --"
+  "$LIB/act.sh" mine "$seat" x=-25.5 y=$fy 2>&1 | grep -v '^$' || true
+  "$LIB/act.sh" mine "$seat" x=-26.5 y=$fy 2>&1 | grep -v '^$' || true
 fi
 
 echo "-- placing electric-mining-drill(-24.5,$sy) facing east --"
