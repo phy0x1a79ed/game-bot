@@ -14,6 +14,7 @@ async def main() -> None:
     parser.add_argument("--port", type=int, default=8765, help="TCP port (default 8765)")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s viewer %(levelname)s %(message)s")
+    logging.getLogger("websockets").setLevel(logging.WARNING)
     ws_server, _ = await server.start(args.host, args.port)
     print(f"Chess viewer on http://{args.host}:{args.port}/ (Ctrl-C to stop)", flush=True)
     async with ws_server:
