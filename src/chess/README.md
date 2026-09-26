@@ -64,7 +64,7 @@ A bot that needs its own dependencies gets `envs/chess-<name>.yml`. The game mas
 2. Open that URL.
 3. In another terminal, run `dev/chess.sh match <a> <b> --ui`. It plays at 0.5 s per ply and prints a link to the game.
 
-The page also starts games, including against you: name a seat `@<you>` and click to move. It pauses, resumes and steps a game, sets its pace, and saves it. It replays saves and finished sessions.
+The page also starts games, including against you: name a seat `@<you>` and click to move. It pauses, resumes and steps a game, sets its pace, and saves it. It replays saves and finished sessions. A replay plays by itself at the delay set on its slider. The space bar plays and pauses it.
 
 Under WSL, a Windows browser reaches `127.0.0.1` through WSL's localhost forwarding.
 

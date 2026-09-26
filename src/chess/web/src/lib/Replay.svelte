@@ -15,6 +15,8 @@
   let flipped = $state(false);
   let resuming = $state(false);
   let error = $state<string | null>(null);
+  let playing = $state(false);
+  let delay = $state(1);
 
   const last = $derived(data ? data.moves.length - 1 : -1);
   const fen = $derived(!data ? '' : cursor < 0 ? data.initial_fen : data.moves[cursor].fen);
@@ -26,14 +28,35 @@
   });
   const source = $derived(save ?? `session:${session}`);
 
+  $effect(() => {
+    if (!playing) return;
+    if (cursor >= last) {
+      playing = false;
+      return;
+    }
+    const timer = setTimeout(() => (cursor += 1), delay * 1000);
+    return () => clearTimeout(timer);
+  });
+
+  function togglePlay() {
+    if (!playing && cursor >= last) cursor = -1;
+    playing = !playing;
+  }
+
+  function seek(to: number) {
+    playing = false;
+    cursor = Math.max(-1, Math.min(last, to));
+  }
+
   onMount(() => {
     void load();
     const onKey = (e: KeyboardEvent) => {
       if (!data || (e.target as HTMLElement | null)?.closest?.('input, select, textarea')) return;
-      if (e.key === 'ArrowLeft') cursor = Math.max(-1, cursor - 1);
-      else if (e.key === 'ArrowRight') cursor = Math.min(last, cursor + 1);
-      else if (e.key === 'Home') cursor = -1;
-      else if (e.key === 'End') cursor = last;
+      if (e.key === 'ArrowLeft') seek(cursor - 1);
+      else if (e.key === 'ArrowRight') seek(cursor + 1);
+      else if (e.key === 'Home') seek(-1);
+      else if (e.key === 'End') seek(last);
+      else if (e.key === ' ') togglePlay();
       else return;
       e.preventDefault();
     };
@@ -103,10 +126,13 @@
       </div>
 
       <div class="card controls">
-        <Button size="sm" aria-label="First position" onclick={() => (cursor = -1)}>«</Button>
-        <Button size="sm" aria-label="Previous move" onclick={() => (cursor = Math.max(-1, cursor - 1))}>◀</Button>
-        <Button size="sm" aria-label="Next move" onclick={() => (cursor = Math.min(last, cursor + 1))}>▶</Button>
-        <Button size="sm" aria-label="Last position" onclick={() => (cursor = last)}>»</Button>
+        <Button size="sm" aria-label="First position" onclick={() => seek(-1)}>«</Button>
+        <Button size="sm" aria-label="Previous move" onclick={() => seek(cursor - 1)}>‹</Button>
+        <Button size="sm" kind="primary" aria-label={playing ? 'Pause' : 'Play'} onclick={togglePlay}>
+          {playing ? '❚❚ Pause' : '▶ Play'}
+        </Button>
+        <Button size="sm" aria-label="Next move" onclick={() => seek(cursor + 1)}>›</Button>
+        <Button size="sm" aria-label="Last position" onclick={() => seek(last)}>»</Button>
         <span class="muted">{cursor + 1} / {data.moves.length}</span>
         {#if cursor >= 0 && data.moves[cursor].think_s != null}
           <span class="faint">thought {data.moves[cursor].think_s.toFixed(2)} s</span>
@@ -114,8 +140,13 @@
         <Button size="sm" onclick={() => (flipped = !flipped)}>Flip</Button>
       </div>
 
+      <label class="card field">
+        <span>Delay: {delay.toFixed(1)} s between moves</span>
+        <input type="range" min="0.1" max="3" step="0.1" bind:value={delay} />
+      </label>
+
       <div class="card">
-        <MoveList moves={data.moves} rejected={data.rejected} current={cursor} onselect={(i) => (cursor = i)} />
+        <MoveList moves={data.moves} rejected={data.rejected} current={cursor} onselect={seek} />
       </div>
 
       <div class="controls">
