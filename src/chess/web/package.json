@@ -1,0 +1,17 @@
+{
+  "name": "chess-arena-viewer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "cm-chessboard": "^8.14.0"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^4.0.4",
+    "svelte": "^5.56.1",
+    "vite": "^5.4.21"
+  }
+}

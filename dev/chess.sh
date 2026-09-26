@@ -3,6 +3,7 @@
 #   chess.sh env              create or update the conda envs from envs/
 #   chess.sh test [pytest args]
 #   chess.sh ui [--port N]    serve the browser viewer on 127.0.0.1
+#   chess.sh web-build        rebuild the committed page bundle (needs node)
 #   chess.sh <command> ...    session CLI; see `chess.sh --help`
 set -euo pipefail
 
@@ -29,6 +30,11 @@ case "${1:-}" in
         shift
         cd "$ROOT"
         exec mamba run --no-capture-output -n chess python -m pytest src/chess/tests "$@"
+        ;;
+    web-build)
+        cd "$ROOT/src/chess/web"
+        npm ci --no-audit --no-fund
+        exec npm run build
         ;;
     ui)
         shift
