@@ -9,9 +9,13 @@ description = "Chess bot arena: game library, game master sessions and bots"
 requires-python = ">=3.11"
 dependencies = ["websockets>=13", "chess"]
 
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
 [tool.setuptools.package-dir]
 "" = "src/chess"
 
 [tool.setuptools.packages.find]
 where = ["src/chess"]
-include = ["game", "game.*", "coms", "coms.*", "game_master", "game_master.*", "ai_*"]
+include = ["game", "game.*", "coms", "coms.*", "game_master", "game_master.*", "viewer", "viewer.*",
+           "ai_*"]

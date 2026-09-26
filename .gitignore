@@ -4,3 +4,4 @@ __pycache__/
 data/chess/sessions/
 *.egg-info/
 node_modules/
+.venv/

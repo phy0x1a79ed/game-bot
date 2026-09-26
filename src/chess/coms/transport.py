@@ -13,8 +13,8 @@ from websockets.asyncio.server import Server, ServerConnection, unix_serve
 BOT_URI = "ws://localhost/bot"
 CONTROL_URI = "ws://localhost/control"
 
-# sockaddr_un.sun_path is 108 bytes including the terminating NUL.
-MAX_SOCKET_PATH = 107
+# sockaddr_un.sun_path, less its terminating NUL: 108 bytes on Linux, 104 on macOS.
+MAX_SOCKET_PATH = 103
 MAX_FRAME_BYTES = 8 * 1024 * 1024
 
 # Local sockets report a dead peer on their own. Keepalive pings would only

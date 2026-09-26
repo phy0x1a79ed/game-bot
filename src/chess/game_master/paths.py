@@ -21,7 +21,7 @@ DATA = Path(os.environ.get("CHESS_ARENA_DATA", REPO_ROOT / "data" / "chess"))
 SAVES = DATA / "saves"
 SESSION_RECORDS = DATA / "sessions"
 
-# Kept short: every socket path must fit in 107 bytes.
+# Kept short: every socket path must fit in transport.MAX_SOCKET_PATH bytes.
 RUNTIME = Path(os.environ.get("CHESS_ARENA_RUNTIME", f"/tmp/chess-arena-{os.getuid()}"))
 
 SID_RE = re.compile(r"^[a-z0-9]{5}$")

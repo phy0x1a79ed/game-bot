@@ -1,14 +1,22 @@
 #!/usr/bin/env bash
 # Chess arena entry point.
-#   chess.sh env              create or update the conda envs from envs/
+#   chess.sh env              build .venv, or the conda envs from envs/ when mamba is on PATH
 #   chess.sh test [pytest args]
 #   chess.sh ui [--port N]    serve the browser viewer on 127.0.0.1
 #   chess.sh web-build        rebuild the committed page bundle (needs node)
 #   chess.sh <command> ...    session CLI; see `chess.sh --help`
+# Commands run in .venv when it exists, else in the conda env `chess`.
+# Set PYTHON to pick the interpreter that `env` builds .venv from.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV="$ROOT/.venv"
 export PYTHONPATH="$ROOT/src/chess"
+
+die() {
+    echo "chess.sh: $*" >&2
+    exit 1
+}
 
 sync_env() {
     local file="$1" name
@@ -20,16 +28,51 @@ sync_env() {
     fi
 }
 
+find_python3() {
+    local candidate
+    for candidate in ${PYTHON:-} python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" >/dev/null &&
+            "$candidate" -c 'import sys; sys.exit(sys.version_info < (3, 11))' 2>/dev/null; then
+            echo "$candidate"
+            return
+        fi
+    done
+    die "need Python 3.11 or newer; found $(python3 --version 2>&1 || echo none). Set PYTHON to one."
+}
+
+build_venv() {
+    local python
+    python="$(find_python3)"
+    echo "building .venv with $("$python" --version)"
+    "$python" -m venv "$VENV"
+    "$VENV/bin/python" -m pip install --quiet --upgrade pip
+    "$VENV/bin/python" -m pip install --quiet -e "$ROOT[dev]"
+    echo "ready: dev/chess.sh test"
+}
+
+run_python() {
+    if [[ -x "$VENV/bin/python" ]]; then
+        exec "$VENV/bin/python" "$@"
+    elif command -v mamba >/dev/null; then
+        exec mamba run --no-capture-output -n chess python "$@"
+    fi
+    die "no Python env yet; run: dev/chess.sh env"
+}
+
 case "${1:-}" in
     env)
-        for file in "$ROOT"/envs/chess.yml "$ROOT"/envs/chess-*.yml; do
-            [[ -e "$file" ]] && sync_env "$file"
-        done
+        if command -v mamba >/dev/null && [[ ! -d "$VENV" ]]; then
+            for file in "$ROOT"/envs/chess.yml "$ROOT"/envs/chess-*.yml; do
+                [[ -e "$file" ]] && sync_env "$file"
+            done
+        else
+            build_venv
+        fi
         ;;
     test)
         shift
         cd "$ROOT"
-        exec mamba run --no-capture-output -n chess python -m pytest src/chess/tests "$@"
+        run_python -m pytest src/chess/tests "$@"
         ;;
     web-build)
         cd "$ROOT/src/chess/web"
@@ -38,9 +81,9 @@ case "${1:-}" in
         ;;
     ui)
         shift
-        exec mamba run --no-capture-output -n chess python -m viewer "$@"
+        run_python -m viewer "$@"
         ;;
     *)
-        exec mamba run --no-capture-output -n chess python -m game_master.cli "$@"
+        run_python -m game_master.cli "$@"
         ;;
 esac

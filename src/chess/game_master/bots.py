@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -49,6 +50,9 @@ def bot_exists(name: str) -> bool:
 
 def bot_command(name: str) -> list[str]:
     if (paths.ENVS / f"chess-{name}.yml").is_file():
+        if shutil.which("mamba") is None:
+            raise BotFailed(f"bot {name!r} runs in its own env from envs/chess-{name}.yml, "
+                            "which needs mamba on PATH")
         return ["mamba", "run", "--no-capture-output", "-n", f"chess-{name}",
                 "python", "-u", "-m", f"ai_{name}"]
     # The game master already runs in the shared `chess` env, so its own
