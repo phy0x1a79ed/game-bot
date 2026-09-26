@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -107,3 +108,30 @@ def test_start_with_unknown_bot_leaves_no_session():
     assert not _session_dirs()
     after = set(paths.SESSION_RECORDS.iterdir()) if paths.SESSION_RECORDS.is_dir() else set()
     assert after == records_before
+
+
+def test_match_prints_every_game_and_the_score():
+    result = cli_json("match", "naive", "simple", "--games", "2", "--seed", "3")
+    assert [(g["white"], g["black"]) for g in result["games"]] == [("naive", "simple"),
+                                                                    ("simple", "naive")]
+    assert all(g["result"] in ("1-0", "0-1", "1/2-1/2") for g in result["games"])
+    assert set(result["score"]) == {"naive", "simple"} and sum(result["score"].values()) == 2
+    assert result["sid"] not in [s["sid"] for s in cli_json("ls")["sessions"]]
+
+
+def test_new_bot_plays_and_a_crash_names_its_log():
+    name = f"t_new_{os.getpid()}"
+    folder = paths.SRC / f"ai_{name}"
+    try:
+        assert cli("new-bot", name).stdout.startswith("created ")
+        assert cli("new-bot", name, check=False).returncode == 2
+        assert cli("new-bot", "Bad-Name", check=False).returncode == 2
+        assert len(cli_json("match", name, "naive", "--games", "1")["games"]) == 1
+
+        main = folder / "__main__.py"
+        main.write_text(main.read_text().replace("state = GameState", "raise ValueError('oops')\n"
+                                                 "        state = GameState"))
+        out = cli("match", name, "naive", "--games", "1").stdout
+        assert f"{name} lost by resignation" in out and f"bot0-{name}.log" in out
+    finally:
+        shutil.rmtree(folder, ignore_errors=True)

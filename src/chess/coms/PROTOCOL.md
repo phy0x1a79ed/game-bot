@@ -2,20 +2,21 @@
 
 ## Purpose & Contents
 
-This file is the source of truth for the two message contracts of the chess arena:
+This file is the source of truth for the three message contracts of the chess arena:
 
 - **Contract A** covers the game master and a bot.
 - **Contract B** covers a client, such as the CLI, and a game master session.
+- **Contract C** covers the browser page and the viewer, `dev/chess.sh ui`.
 
-`protocol.py` implements exactly these messages. Change this file and `protocol.py` together. A field that exists in one but not the other breaks bots silently, because both sides ignore unknown fields.
+`protocol.py` implements exactly the messages of A and B. `game_master/verbs.py` and `viewer/server.py` implement C. Change this file and its implementation together. A field that exists in one but not the other breaks a peer silently, because every side ignores unknown fields.
 
-## Common rules
+## Common rules for A and B
 
 - The transport is WebSocket over a Unix domain socket. The host part of the handshake URI is nominal.
 - Every frame is one UTF-8 JSON text frame. Binary frames are errors.
 - Both sides ignore unknown fields.
 - Moves are UCI strings, for example `e2e4` or `e7e8q`. Positions are FEN strings.
-- A socket path must be 107 bytes or shorter.
+- A socket path must be 103 bytes or shorter, the macOS limit.
 
 **CAUTION:** Unix sockets do not work on Windows-mounted paths such as `/mnt/c` under WSL. Keep socket directories under `/tmp`.
 
@@ -180,3 +181,83 @@ A watcher that falls too far behind gets one `resync` frame and the server close
 | `internal` | The game master raised an unexpected error. |
 | `not_your_turn` | `submit_move` names a color with no open request, or a bot's color. |
 | `stale` | `submit_move` names a `game_id` or `ply` that is not the position in play. |
+
+## Contract C: browser and viewer
+
+### Transport
+
+- The viewer serves the page and one WebSocket on one TCP port, `127.0.0.1:8765` by default.
+- A GET for any path other than `/ws` returns a file of `src/chess/web/dist/`. An unknown path returns `index.html`.
+- The page connects to `ws` relative to its own URL. The viewer refuses the upgrade with 403 when the `Origin` host differs from `Host`, so another site's page cannot drive the arena.
+- One connection carries every call and every event. The page sends each request without waiting for the previous reply.
+
+### Frames
+
+- Request: `{"id", "verb", "args"}`.
+- Success: `{"id", "ok": true, "result"}`.
+- Failure: `{"id", "ok": false, "error": {"code", "message"}}`.
+- Event: `{"event": {"session_id", "kind", "seq", "data"}}`. An event has no `id`.
+
+### Verbs
+
+Every verb that names a session takes `session_id`. Most verbs map one to one onto a Contract B method, and `game_master/verbs.py` implements them without a transport.
+
+| verb | args | result |
+|---|---|---|
+| `bots` | none | `{bots}`, the names of `src/chess/ai_*` bots. |
+| `start` | The `start_game` params and lifetime params, plus `owner`="viewer". Or `load` (a save name) and `play`. | `{session_id, mode}`. `mode` is `pvb` when a seat is external, else `bvb`. See *Defaults*. |
+| `kill` | `session_id` | `{killed: true, session_id}` |
+| `rematch` | `session_id` | `{session_id, mode, previous}`. Kills the session and starts a new one with the same players, settings and owner, without the seed. |
+| `status` | `session_id` (optional) | `{sessions}`, the Contract B status of one or of every live session. |
+| `observe` | `session_id` | `{status, state}` |
+| `history` | `session_id`, `game_id`, `fens` | The Contract B `history` result. |
+| `snapshot` | `session_id` | `{seq, snapshot}`, as a `watch` without `since_seq`. |
+| `saves` | none | `{saves, records}`: a summary of each save and of each session record. |
+| `replay` | Exactly one of `name` and `session_id`, plus `game_id` | `{game_ids, score, labels}` plus the `history` of the chosen game with `fens`. Needs no live session. |
+| `move` | `session_id`, `move`, `ply` | The `submit_move` result for the external seat to move. A `ply` that is not the open request's fails with `stale`. |
+| `resign` | `session_id`, `color` | `{result, reason}`. `color` defaults to the only external seat. |
+| `pause`, `resume`, `step` | `session_id` | The results of `stop`, `resume` and `step`. |
+| `set_pace` | `session_id`, `min_ply_s` | `{min_ply_s}` |
+| `save` | `session_id`, `name`, `overwrite` | `{path}` |
+| `follow` | `session_id` | `{seq, snapshot}`. Starts the session's events for this connection. |
+| `unfollow` | `session_id` | `{following: false}` |
+
+### Defaults
+
+The viewer starts sessions that clean up after themselves:
+
+- `idle_timeout_s` defaults to 1800 and `finished_linger_s` to 900.
+- A bot-only series defaults to `min_ply_s`=0.5, so a person can follow it.
+- `owner` becomes the `owner` label, and the `mode` label records `mode`.
+- A loaded save plays on unless its series is finished or `play` is false.
+
+### Follows
+
+`follow` subscribes the connection to one session's events. Each event arrives as `{"event": {...}}` with the Contract B event name as `kind`, and its `seq` and `data`. After a `resync` event, `follow` again for a fresh snapshot.
+
+The viewer holds one Contract B `watch` per session that at least one connection follows. It closes that watch when the last follower unfollows or disconnects. A session that no browser shows therefore has `watchers` 0, so its idle and linger timeouts fire.
+
+**CAUTION:** A browser tab left open on a session keeps that session alive.
+
+Three `kind`s go to every connection, whether or not it follows the session. Their `seq` is null.
+
+| kind | data | when |
+|---|---|---|
+| `session_started` | `mode` | A `start` or `rematch` through this viewer made a session. |
+| `session_ended` | none | A `kill` through this viewer, or the end of a followed session's watch. |
+| `saved` | `name` | A `save` through this viewer. |
+
+A session started or ended elsewhere, such as by the CLI, sends no lobby event. The page polls `status` for those.
+
+The viewer queues at most 5000 frames per connection. A connection that falls further behind is closed with code 1008.
+
+### Error codes
+
+Contract C passes on the Contract B codes of the method behind a verb, and adds these:
+
+| code | when |
+|---|---|
+| `not_running` | No live session has this `session_id`. |
+| `not_found` | `start` names an unknown save, `rematch` a session without start settings, or `replay` an unknown save, record or game. |
+| `not_your_turn` | `move` finds no external seat to move. |
+| `start_failed` | The session did not start, for a reason without its own code. |
