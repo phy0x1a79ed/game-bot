@@ -48,22 +48,7 @@ echo "upkeep.sh started for $seat, interval=${interval}s, pid=$$"
 # what starved copper modules 5/6's drills and output inserters dry while the
 # iron column silently ate the whole coal-check haul first).
 coal_topup() {
-  have_coal=$("$LIB/act.sh" observe "$seat" radius=1 | jq -r '.snapshot.inventory["coal"] // 0')
-  echo "coal on hand: $have_coal"
-  if [ "${have_coal:-0}" -lt "$COAL_FLOOR" ] 2>/dev/null; then
-    LUA_CHECK='local n=0 for _,e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="enemy",type="unit",position={70,-40},radius=60}) do n=n+1 end rcon.print(n)'
-    enemies=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_CHECK" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-    if [ "${enemies:-0}" = "0" ]; then
-      for s in "${RING_STOPS[@]}"; do
-        set -- $s; ax=$1; ay=$2; cx=$3; cy=$4; cnt=$5
-        "$LIB/walk.sh" "$seat" "$ax" "$ay" 3 >/dev/null
-        got=$("$LIB/act.sh" take "$seat" x="$cx" y="$cy" name=coal count="$cnt" target=iron-chest 2>/dev/null | jq -r '.taken // 0')
-        echo "  ring chest ($cx,$cy): +${got} coal"
-      done
-    else
-      echo "  enemies near ring, skipping coal-run this pass"
-    fi
-  fi
+  "$LIB/service-coal.sh" "$seat" "$COAL_FLOOR"
 }
 
 while true; do

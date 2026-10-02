@@ -155,6 +155,23 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   coal belt while the belt was still empty, and the base blacked out within
   minutes (tick 969000). A boiler's fuel slot holds 50 coal, about 2 minutes
   at 1.5 MW, so a 10-minute upkeep cycle cannot cover a boiler by hand.
+- Iron turned supply-limited at tick ~1035000, once the circuit block and the
+  mall drew on it. The two circuit assemblers (up to 120 iron/min) filled
+  uncapped chests with 190 circuits, and the splitter (-19,-8.5) gives iron B
+  only what row y=-7.5 leaves. Bar every output chest (3 slots) so a block
+  idles when stocked.
+- Coal is solved by electric drills (tick 1060000): 6 drills at
+  (81.5,-45.5/-42.5/-39.5/-36.5/-33.5/-30.5) facing west drop on the east
+  lane of the coal belt x=79.5, powered by a small-pole line along y=-27.5
+  from (-20.5,-27.5). The belt then backs up to the boiler end. A hand-coal
+  tap beside the depot feeds the upkeep loop: inserters (1.5,-27.5) and
+  (2.5,-27.5) lift coal off the belt into iron chests (1.5,-28.5) and
+  (2.5,-28.5), about 50 coal/min each; stand at (3.5,-30.5).
+- Coal ring 1's drill (68,-42) ran out of ore at tick ~1035000, so the drill
+  it fed, (72,-42), lost fuel.
+- Wood runs out: the trees by the copper field are gone, and the nearest
+  stand at x>=120. A small pole costs half a wood. Keep spare poles in the
+  depot.
 
 **Coal belt and copper collector** (both built by tick 990000)
 
@@ -229,6 +246,19 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
 - No red-only tech is left after `logistic-science-pack`: every ready tech
   needs green too, so the red-first rule waits for chemical science. The
   research queue takes at most 7 entries; `add_research` errors past that.
+- At 5 labs, red becomes the limit (tick 1065000). Red asm (-42.5,-11.5)
+  reads `full_output` because its packs reach only lab 1, so asm
+  (-34.5,-11.5) alone fed three labs. The fix is assembling-machine-2 for
+  both red asms (after `automation-2`), which needs steel.
+
+**Mall** (tick 1068000, rows built, waiting on iron)
+
+- Row 1 at y=5.5, outputs to a chest 3 tiles east of each: gear (-12.5),
+  belt (-6.5), underground (-0.5), magazine (5.5), electric drill (11.5),
+  assembler-1 (17.5). Row 2 at y=11.5 east of the circuit block: inserter
+  (9.5), repair pack (15.5), gun turret (21.5). Iron reaches row 1 by
+  extending F east to x=26.5, north, then west along y=2.5. Circuits ride
+  the belt y=8.5 east to a capped stock chest (24.5,8.5).
 
 **Defense**
 
@@ -249,6 +279,14 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   nest as close as y=-77, on it.
 - The north wall at y=-71.5 is continuous from x=-33.5 to -14.5. The run 2
   note of a gap at x=-34..-30 was wrong by tick 919759.
+- The first attack came at tick ~1034000 on the north iron field, 25 minutes
+  after the cloud touched the nests. It destroyed one electric drill at
+  (-24,-70) and grazed a turret and a wall tile. A third turret now stands
+  outside the wall at (-23,-74).
+- Turrets added by tick 1065000: mall (-22,10), (-22,17), (-2,25), (12,25),
+  (29,16); green science (-27,9); copper field south (17,69), (24,69); power
+  block 2 (-66,-25), (-58,-26); stone drill (57,-30). Radars at
+  (-29.5,-62.5) and (-21.5,21.5).
 
 ### 2026-09-26 — a crew of three builders under a supervisor
 

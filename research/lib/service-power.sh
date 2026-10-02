@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # service-power.sh SEAT [TARGET]
-# Keeps the boiler buffer chest (-50.5,-6.5) at TARGET coal (default 500) from coal on hand. Safe to call repeatedly -- no-ops if the feed is already
+# Backup boiler buffer chest (-50.5,-6.5): refilled to TARGET (default 500) only when it falls below 200 (supervisor 15:16 order; the coal belt is the primary feed). Safe to call repeatedly -- no-ops if the feed is already
 # at or above target.
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
@@ -15,7 +15,8 @@ chest_coal=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local c=game.sur
 belt_coal=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local b=game.surfaces[1].find_entity("transport-belt",{-47.5,-8.5}) rcon.print(b and (b.get_transport_line(1).get_item_count("coal")+b.get_transport_line(2).get_item_count("coal")) or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
 echo "boiler buffer chest(-50.5,-6.5): ${chest_coal} coal (target ${target}); coal on belt tile at inserter: ${belt_coal}"
 have_coal=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["coal"] // 0')
-give=$((target - chest_coal)); [ "$give" -gt "$have_coal" ] && give=$have_coal
+BUFFER_FLOOR=200
+give=$((target - chest_coal)); [ "${chest_coal:-0}" -ge "$BUFFER_FLOOR" ] && give=0; [ "$give" -gt "$have_coal" ] && give=$have_coal
 if [ "${chest_coal:-0}" -ge 0 ] && [ "$give" -gt 20 ] 2>/dev/null; then
   "$LIB/walk.sh" "$seat" -49 -5 3 >/dev/null
   got=$("$LIB/act.sh" insert "$seat" x=-50.5 y=-6.5 name=coal count="$give" target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
