@@ -203,6 +203,19 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   steel/min.
 - The depot (0.5,-19.5) filled with 2.5k copper plates and refused
   deposits; a second chest at (2.5,-19.5) holds copper.
+- All 13 column furnaces are steel furnaces (tick 1172000). They made 402
+  plates/min while their ore buffers drained; sustained, each is
+  drill-limited at 30/min, about 420/min with the field modules. Iron then
+  outran every consumer: all iron belts sat full and the east furnaces
+  buffered plates. The next gain is consumers (green packs, labs, the
+  circuit block), not smelting. `lib/swap-furnace.sh` swaps one furnace in
+  place; `lib/steel-column-status.lua` reads all 13.
+- The upkeep loop must look a furnace up by type, not by name, or a swap
+  silently drops it from the fuel round.
+- The coal leg x=-49.5 feeds power blocks 1, 2 and the main boiler. A west
+  group broke one tile of it and one water pipe (-64.5,-22.5) at tick
+  1176000, and block 2 stopped within a minute. Both are single points of
+  failure for the grid.
 
 **Coal belt and copper collector** (both built by tick 990000)
 
@@ -370,6 +383,13 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   minutes. Plan the north line for the next wave's size, not the last
   one's: about 30 magazines and 4-5 overlapping turrets per 100 small
   biters.
+- The end turret of a line dies first when the line stops where the wall
+  stops: the 90-biter wave at tick 1165000 rounded the wall's east end
+  (x=-14.5) and killed (-18,-68) a second time. The line now carries on
+  past the end: (-16,-66) and (-14,-68).
+- The ammo assembler (-37.5,-4.5) is fed by burner inserters at about 36
+  iron/min, so it makes about 9 magazines/min, not its 30. Insert iron
+  straight into the assembler when waves grow.
 - Both radars are mined (300 kW each, and no script reads them).
 - Turrets added by tick 1065000: mall (-22,10), (-22,17), (-2,25), (12,25),
   (29,16); green science (-27,9); copper field south (17,69), (24,69); power
@@ -418,17 +438,9 @@ reloaded tick 415000 and played defense-first with scripted actions.
 - Defense: 17 turrets, a stone wall at y=-71.5 with a 5-tile gap at
   x=-34..-30. Evolution about 0.06.
 
-**Next, in order.** Each lane's handoff file holds the coordinates.
-
-1. Build the coal belt to the boiler. Reconcile its route with the bus first:
-   cross the bus underground and give iron B the row y=-6.5.
-2. Feed labs 1 and 2 with green, and automate the green line's two
-   hand-stocked feed chests.
-3. Build the copper field collector onto the copper lane, then iron B and
-   the gear and circuit spurs.
-4. Repair the damaged turrets and furnace with repair packs, and close the
-   wall gap.
-5. Build the mall row by row, from the ratio table below.
+**Next, in order.** All five items (coal belt, green to every lab, copper
+collector and iron B, repairs, mall) landed in run 3. The current list is in
+the 2026-10-02 entry.
 
 **Strategy from tick 725000.** The supervisor set these after the user's review.
 
@@ -616,7 +628,11 @@ at speed 0.5, assembling-machine-2 at 0.75)
 
 | What | Where |
 |---|---|
-| Iron column | drills (-24,y) facing east, furnaces (-22,y), y = -42 to -63 step 3 |
+| Iron column | electric drills (-24.5,y-0.5) facing east, steel furnaces (-22,y), y = -45 to -63 step 3; west column drills (-36.5,y-0.5), steel furnaces (-34,y), inserters (-32.5,y+0.5), y = -48 to -63 step 3 |
+| Power blocks 2 and 3 | pump (-69.5,-21.5) west, pipe y=-22.5, boilers (-52,-20.5) and (-52,-24.5) west, engines (-56.5/-61.5,-20.5) and (-56.5/-61.5,-24.5), electric inserters (-50.5,-20.5/-24.5) off the coal leg x=-49.5 |
+| Self-fuelling furnace row | coal injected sparse onto the plate belt, fuel inserters per furnace, filter splitter at the field end returning coal to a dead-ended loop (copper field, 2026-10-02) |
+| Steel line | stone furnaces (-4,17),(-1,17), inserters north at y=15.5 and y=18.5, chests y=19.5 |
+| Brick line | stone chest (59.5,-31.5), inserter (59.5,-32.5) south, furnace (59,-34), inserter (57.5,-34.5) east, chest (56.5,-34.5) |
 | Self-fuelling ore module | drill (20,60) east, furnace (22,60), coal chest (17.5,60.5) with inserter (18.5,60.5) west into the drill, coal chest (25.5,60.5) with inserter (24.5,60.5) east into the furnace |
 | Power block | pump (-52.5,-7.5) south, pipe (-52.5,-8.5), boiler (-50.5,-9) north, pipe (-50.5,-10.5), engine (-50.5,-13.5) north, pole (-48.5,-13.5) |
 | Boiler feed | iron chest (-47.5,-8.5), burner inserter (-48.5,-8.5) east |

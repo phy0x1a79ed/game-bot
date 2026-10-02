@@ -7,7 +7,7 @@ for _,u in ipairs(units) do byname[u.name]=(byname[u.name] or 0)+1 end
 local nm={} for k,v in pairs(byname) do nm[#nm+1]=k..'='..v end table.sort(nm)
 out[#out+1]=string.format('tick=%d evo=%.4f units=%d [%s]',game.tick,evo,#units,table.concat(nm,' '))
 if byname['medium-biter'] or byname['medium-spitter'] then out[#out+1]='ALERT MEDIUM units present' end
-local nests={{'N1',-17,-237},{'N2',46,-245},{'SW',-186,134},{'W',-252,14},{'NW',-241,-185},{'W2',-296,-39},{'S',-24,336}}
+local nests={{'N1',-17,-237},{'N2',46,-245},{'SW',-186,134},{'W',-252,14},{'NW',-241,-185},{'W2',-296,-39},{'S',-24,336},{'N3',20,-367}}
 local c={} for _,n in ipairs(nests) do c[n[1]]=0 end
 local near={} -- units within 120 of the base centre (-10,0)
 for _,u in ipairs(units) do
