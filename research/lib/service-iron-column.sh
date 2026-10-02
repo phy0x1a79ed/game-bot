@@ -102,6 +102,36 @@ for y in "${EAST_YS[@]}"; do
   echo "east y=$y: drill+${di} furnace+${fi} out-inserter+${oi} coal (belt-fed, no collection)"
 done
 
+# west column (2026-10-02, iron lane): 6 stone furnaces (-34,y); electric drills and
+# inserters, so only the furnaces burn coal. One stop reaches all six.
+WEST_YS=(-63 -60 -57 -54 -51 -48)
+"$LIB/walk.sh" "$seat" -30.5 -55.5 3 >/dev/null 2>&1
+west_in=0
+for y in "${WEST_YS[@]}"; do
+  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entity('stone-furnace',{-34,$y}) rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+  need=$((50 - lvl))
+  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
+    fi=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target=stone-furnace | jq -r '.inserted // 0')
+    west_in=$((west_in + fi))
+  fi
+done
+total_coal_in=$((total_coal_in + west_in))
+echo "west column furnaces (-34,y): +${west_in} coal"
+
+# steel line (2026-10-02, iron lane): 2 stone furnaces south of feed row F.
+"$LIB/walk.sh" "$seat" -2.5 21.5 3 >/dev/null 2>&1
+steel_in=0
+for x in -4 -1; do
+  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entity('stone-furnace',{$x,17}) rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+  need=$((50 - lvl))
+  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
+    fi=$("$LIB/act.sh" insert "$seat" x=$x y=17 name=coal count="$need" target=stone-furnace | jq -r '.inserted // 0')
+    steel_in=$((steel_in + fi))
+  fi
+done
+total_coal_in=$((total_coal_in + steel_in))
+echo "steel furnaces (-4,17),(-1,17): +${steel_in} coal"
+
 # off-belt modules: RELOC + adopted module A -- own output chest, swept by hand
 "$LIB/walk.sh" "$seat" -29 -42 3 >/dev/null 2>&1
 di=$("$LIB/act.sh" insert "$seat" x=-32 y=-44 name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
@@ -126,7 +156,7 @@ echo "TOTAL: coal inserted=$total_coal_in plates collected=$total_plates"
 # now, but keep this as a backstop in case it backs up or drops.
 GEAR_X=-38.5
 GEAR_Y=-8.5
-GEAR_TARGET=500
+GEAR_TARGET=0  # belt feeds this chest; iron on hand goes to the ammo assembler first (2026-10-02, iron shortage)
 gear_have=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local c=game.surfaces[1].find_entities_filtered{position={$GEAR_X,$GEAR_Y},radius=1,name='iron-chest'}[1] rcon.print(c and c.get_inventory(defines.inventory.chest).get_item_count('iron-plate') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
 echo "gear-asm chest (${GEAR_X},${GEAR_Y}) currently has ${gear_have} iron"
 if [ "${gear_have:-0}" -ge 0 ] 2>/dev/null; then
