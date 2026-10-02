@@ -171,7 +171,38 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   it fed, (72,-42), lost fuel.
 - Wood runs out: the trees by the copper field are gone, and the nearest
   stand at x>=120. A small pole costs half a wood. Keep spare poles in the
-  depot.
+  depot. Medium poles need steel.
+- The west iron column (tick 1083000) adds 113 plates/min: 6 modules at
+  y=-63,-60,-57,-54,-51,-48, each an electric drill (-36.5,y-0.5) facing
+  east, a stone furnace (-34,y) and an electric inserter (-32.5,y+0.5)
+  facing west. Its belt runs north on x=-31.5 from y=-47.5, east on
+  y=-66.5 and south on x=-19.5 into the head of iron A. Poles
+  (-34.5,-61.5/-55.5/-49.5) join the grid at (-27.5,-62.5). One stand,
+  (-30.5,-55.5), reaches all six furnaces.
+- A stone furnace is the limit of every electric-drill module: the drill
+  mines 30 ore/min and the furnace smelts 18.75. Steel furnaces (after
+  `advanced-material-processing`, 6 steel and 10 bricks each) swap in place
+  and add 11.25/min per module.
+- Power block 3 (tick 1087000) brings the cap to 5.4 MW: boiler (-52,-24.5)
+  facing west, steam pipe (-53.5,-24.5), engines (-56.5,-24.5) and
+  (-61.5,-24.5), electric inserter (-50.5,-24.5) off the coal belt's x=-49.5
+  leg. It needs no pump: a west-facing boiler passes water through its north
+  and south end tiles, so it chains off block 2's pipe end (-51.5,-22.5).
+- An uncapped output chest starves everything downstream of it. At tick
+  1117000 the gear assembler (-10.5,17.5), the first consumer on F, put 34
+  gears/min into the chest (-11.5,20.5) (674 gears) and took 68 of the 83
+  iron/min that reached F, so the mall, the steel line and the circuit block
+  sat idle. A 3-slot bar returned the iron. Iron at that point: 274
+  plates/min made, green line 93, gear hoard 68, magazines 47, steel 24, red
+  20.
+- The steel line (tick 1106000): stone furnaces (-4,17) and (-1,17) south of
+  F, input inserters (-4.5,15.5),(-1.5,15.5) and output inserters
+  (-4.5,18.5),(-1.5,18.5) built facing north, chests (-4.5,19.5) and
+  (-1.5,19.5), pole (-2.5,16.5). A furnace inserter loads iron plates and
+  skips copper, so it works off the mixed F row. Two furnaces cap at 7.5
+  steel/min.
+- The depot (0.5,-19.5) filled with 2.5k copper plates and refused
+  deposits; a second chest at (2.5,-19.5) holds copper.
 
 **Coal belt and copper collector** (both built by tick 990000)
 
@@ -232,7 +263,23 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   each. `lib/mine-trees.sh` took 9 wood in under a minute.
 - `lib/walk.sh` retries forever when the target tile lies inside a
   machine's footprint. Walk to a tile outside it.
-- A furnace's result inventory is `defines.inventory.crafter_output`.
+- A furnace's result inventory is `defines.inventory.crafter_output`, its
+  source `defines.inventory.crafter_input` (`furnace_source` is nil in this
+  build).
+- Entity status codes seen: 1 working, 14 low_power, 21
+  no_minable_resources, 28 item_ingredient_shortage, 29 full_output, 33/34
+  waiting_for_source_items, 36 waiting_for_space_in_destination, 58
+  no_power.
+- The copper furnaces fuel themselves off their own plate belt (tick
+  1095000). A splitter (32.5,-26) on the coal main feeds a spur south on
+  x=31.5 to y=55.5 into a return belt that ends at (18.5,67.5). The inserter
+  (18.5,66.5) lifts coal from that end onto the plate belt's start, sparse
+  (about 50/min). Each furnace's fuel inserter tops it to 5 coal and takes no
+  plates. At the field end, a splitter (19,52.5) with `splitter_filter=coal`
+  sends coal east back into the return loop and copper on west. Because the
+  return belt dead-ends and backs up, supply equals burn. Splitter filter
+  and priority are entity settings, set through `exec_lua`. The same pattern
+  fits any furnace row with an output belt.
 
 **Science** (tick 1016000)
 
@@ -250,6 +297,25 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   reads `full_output` because its packs reach only lab 1, so asm
   (-34.5,-11.5) alone fed three labs. The fix is assembling-machine-2 for
   both red asms (after `automation-2`), which needs steel.
+- With both red asms on assembling-machine-2 (tick 1087000), red makes 18
+  packs/min and green 10, so green is the limit. 5 labs: (-46.5,-11.5),
+  (-30.5,-11.5), (-26.5,-11.5) south of belt y=-14.5, and (-44.5,-17.5),
+  (-36.5,-17.5) north of it with inserters picking south. They researched
+  about 9.6 units/min of 30-second techs. A stub belt at (-23.5,-14.5) makes
+  the green feed a side-load, so red and green ride separate lanes.
+- A third green asm at (-34.5,16.5) and a sixth lab at (-32.5,-17.5)
+  (tick 1130000) brought green to 15.4 packs/min and research to 12
+  units/min. The asm takes both feed belts (x=-35.5, x=-33.5) through
+  undergrounds from y=8.5 to 13.5, under the pack belt and the turret
+  (-35,12), and returns packs by an underground from (-34.5,13.5) that
+  side-loads the pack belt at (-34.5,9.5). A lab chained by inserter from
+  its neighbour gets both packs, so it needs no belt access.
+- `steel-axe` is a trigger tech with no pack cost; `add_research` refuses
+  it, so it cannot fill a queue slot.
+- Traps: a seat mines a big rock only from within about 3 tiles; an
+  inserter set before its target exists drops its item on the ground; the
+  lanes of an underground exit read swapped, so identify a lane by its
+  items.
 
 **Mall** (tick 1068000, rows built, waiting on iron)
 
@@ -259,6 +325,10 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   (9.5), repair pack (15.5), gun turret (21.5). Iron reaches row 1 by
   extending F east to x=26.5, north, then west along y=2.5. Circuits ride
   the belt y=8.5 east to a capped stock chest (24.5,8.5).
+- The mall ran unattended from tick 1068000 to 1130000 (gears +13, belts
+  +6, undergrounds +4, magazines +22, one each of drill, assembler-1,
+  inserter and turret), but iron-starved: every assembler read
+  `item_ingredient_shortage`. An assembler-1 crafts 3-ingredient recipes.
 
 **Defense**
 
@@ -281,12 +351,34 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
   note of a gap at x=-34..-30 was wrong by tick 919759.
 - The first attack came at tick ~1034000 on the north iron field, 25 minutes
   after the cloud touched the nests. It destroyed one electric drill at
-  (-24,-70) and grazed a turret and a wall tile. A third turret now stands
-  outside the wall at (-23,-74).
+  (-24,-70) and grazed a turret and a wall tile.
+- Put turrets behind the wall, overlapping. A lone turret placed outside it
+  at (-23,-74) died in the next wave; its replacement stands at (-23,-69).
+- Attacks come as waves, and no `unit_group` ever shows: groups form,
+  launch and die between polls. The leading indicator is the count of
+  units within 60 tiles of a nest. The north nest N1 (-17,-237) masses to
+  40-57 small biters and launches every ~9 game minutes. Its waves stage
+  near x=-30 and hit the north wall x=-30..-17. Groups from the west and
+  south-west nests come along the shore to power block 2 and the green
+  line. A small biter covers the 165 tiles in about 15 s, so there is no
+  warning to act on. `lib/attack-watch.lua` reads the counts.
+- From the first attack to tick 1117000, six waves were repelled with one
+  turret and one drill lost. Evolution was 0.10 then (small biters only).
+- N1's waves grow as the cloud spreads: 40, 30, then 79 small biters at
+  tick 1131000, which came down at x=-4..7 and destroyed the inside turret
+  (-18,-68). Spawner absorption rose from 44 to 84 pollution/min in 15
+  minutes. Plan the north line for the next wave's size, not the last
+  one's: about 30 magazines and 4-5 overlapping turrets per 100 small
+  biters.
+- Both radars are mined (300 kW each, and no script reads them).
 - Turrets added by tick 1065000: mall (-22,10), (-22,17), (-2,25), (12,25),
   (29,16); green science (-27,9); copper field south (17,69), (24,69); power
-  block 2 (-66,-25), (-58,-26); stone drill (57,-30). Radars at
-  (-29.5,-62.5) and (-21.5,21.5).
+  block 2 (-66,-25), (-58,-29); stone drill (57,-30). Added by tick
+  1120000: west flank (-40,-60), (-40,-48); coal patch (75,-55); south-west
+  of the green line (-43,11), (-35,12); mall centre (-6,21), (10,21).
+- Magazines come from the ammo assembler (-37.5,-4.5): `lib/feed-ammo.sh
+  SEAT` moves iron into its input chest (-40.5,-4.5) and collects magazines
+  from (-34.5,-4.5).
 
 ### 2026-09-26 — a crew of three builders under a supervisor
 

@@ -70,6 +70,11 @@ fi
 total_coal_in=0
 total_plates=0
 
+furnace_name() {
+  RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={$1,$2},radius=0.5}[1] rcon.print(e and e.name or 'stone-furnace')" 2>/dev/null | jq -r '.output // "stone-furnace"' | tr -d '[:space:]'
+}
+
+
 # 2026-09-26 14:xx: iron electrified the whole -24,y drill line (HAND_YS +
 # SELF_YS, y=-45..-63) -- electric-mining-drill needs no coal, and the
 # self-fed rows' coal chest + fuel inserter were physically removed. Only the
@@ -77,7 +82,7 @@ total_plates=0
 for y in "${HAND_YS[@]}"; do
   wy=$((y + 2))
   "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
+  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target="$(furnace_name -22 "$y")" | jq -r '.inserted // 0')
   oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
   total_coal_in=$((total_coal_in + fi + oi))
   echo "hand-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, belt-fed, no collection)"
@@ -86,7 +91,7 @@ done
 for y in "${SELF_YS[@]}"; do
   wy=$((y + 2))
   "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
+  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target="$(furnace_name -22 "$y")" | jq -r '.inserted // 0')
   oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
   total_coal_in=$((total_coal_in + fi + oi))
   echo "self-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, chest/fuel-inserter removed, belt-fed, no collection)"
@@ -108,10 +113,10 @@ WEST_YS=(-63 -60 -57 -54 -51 -48)
 "$LIB/walk.sh" "$seat" -30.5 -55.5 3 >/dev/null 2>&1
 west_in=0
 for y in "${WEST_YS[@]}"; do
-  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entity('stone-furnace',{-34,$y}) rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={-34,$y},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
   need=$((50 - lvl))
   if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
-    fi=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target=stone-furnace | jq -r '.inserted // 0')
+    fi=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target="$(furnace_name -34 "$y")" | jq -r '.inserted // 0')
     west_in=$((west_in + fi))
   fi
 done
