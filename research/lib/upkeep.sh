@@ -74,13 +74,27 @@ while true; do
   coal_topup
 
   echo "-- iron column --"
-  "$LIB/service-iron-column.sh" "$seat" 40 60
+  "$LIB/service-iron-column.sh" "$seat" 40 60 --no-deposit
 
   echo "-- coal check (pre copper) --"
   coal_topup
 
   echo "-- copper --"
   "$LIB/service-copper.sh" "$seat"
+
+  echo "-- depot: iron above 1500 on hand --"
+  have_iron=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["iron-plate"] // 0')
+  if [ "${have_iron:-0}" -gt 1700 ] 2>/dev/null; then
+    "$LIB/walk.sh" "$seat" 0.5 -21 3 >/dev/null 2>&1
+    got=$("$LIB/act.sh" insert "$seat" x=0.5 y=-19.5 name=iron-plate count=$((have_iron - 1500)) target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
+    echo "  depot iron +${got}"
+  fi
+
+  echo "-- iron for ammo assembler + green chests (from gear chest surplus) --"
+  "$LIB/iron-from-gear.sh" "$seat" 1400
+
+  echo "-- coal check (pre power) --"
+  coal_topup
 
   echo "-- power (boiler + ammo assembler) --"
   "$LIB/service-power.sh" "$seat"
@@ -149,6 +163,9 @@ rcon.print(table.concat(out, ";"))
       fi
     done
   fi
+
+  echo "-- repair --"
+  "$LIB/repair.sh" "$seat" 10
 
   t1=$(date +%s)
   echo "=== cycle done in $((t1 - t0))s, sleeping ${interval}s ==="

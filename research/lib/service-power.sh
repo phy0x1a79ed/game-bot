@@ -1,64 +1,31 @@
 #!/usr/bin/env bash
 # service-power.sh SEAT [TARGET]
-# Keeps the boiler feed chest (-47.5,-8.5) at TARGET coal (default 300),
-# pulling the shortfall from coal ring 1's 4 chests while never taking a
-# chest below 20. Safe to call repeatedly -- no-ops if the feed is already
+# Keeps the boiler buffer chest (-50.5,-6.5) at TARGET coal (default 500) from coal on hand. Safe to call repeatedly -- no-ops if the feed is already
 # at or above target.
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
-target=${2:-300}
+target=${2:-500}
 [ -z "$seat" ] && { echo "usage: service-power.sh SEAT [target]"; exit 1; }
 
-LUA_LVL='
-local function n(pos) local c=game.surfaces["nauvis"].find_entity("iron-chest",pos) return c and c.get_inventory(defines.inventory.chest).get_item_count("coal") or 0 end
-rcon.print(n({-47.5,-8.5}))
-'
-have=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_LVL" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-echo "boiler feed chest(-47.5,-8.5): ${have} coal (target ${target})"
-need=$((target - have))
-if [ "$need" -le 0 ]; then
-  echo "already at/above target, nothing to do"
-else
-  echo "== enemy check =="
-  LUA_CHECK='local n=0 for _,e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="enemy",type="unit",position={70,-40},radius=60}) do n=n+1 end rcon.print(n)'
-  enemies=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_CHECK" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-  if [ "${enemies:-0}" != "0" ]; then
-    echo "ABORT: enemies near coal ring, skipping boiler top-up this pass."
-  else
-    on_hand=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'rcon.print(player.get_main_inventory().get_item_count("coal"))' 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-    echo "already carrying ${on_hand:-0} coal"
-    need=$((need - on_hand))
-    [ "$need" -lt 0 ] && need=0
-
-    echo "shortfall after on-hand coal: ${need} -- pulling from ring 1 (floor 20/chest)"
-    RING1=("69.5 -42.5" "72.5 -40.5" "70.5 -37.5" "67.5 -39.5")
-    carried=0
-    for c in "${RING1[@]}"; do
-      [ "$carried" -ge "$need" ] && break
-      set -- $c; cx=$1; cy=$2
-      "$LIB/walk.sh" "$seat" "$cx" "$cy" 3 >/dev/null
-      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local c=game.surfaces[\"nauvis\"].find_entity(\"iron-chest\",{$cx,$cy}) rcon.print(c.get_inventory(defines.inventory.chest).get_item_count(\"coal\"))" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-      spare=$((lvl - 20))
-      [ "$spare" -lt 0 ] && spare=0
-      want=$((need - carried))
-      [ "$spare" -gt "$want" ] && spare=$want
-      if [ "$spare" -gt 0 ]; then
-        got=$("$LIB/act.sh" take "$seat" x="$cx" y="$cy" name=coal count="$spare" target=iron-chest 2>/dev/null | jq -r '.taken // 0')
-        carried=$((carried + got))
-        echo "chest($cx,$cy) had ${lvl}: took ${got}"
-      fi
-    done
-
-    total_want=$((on_hand + carried))
-    echo "delivering up to ${total_want} coal to boiler feed"
-    "$LIB/walk.sh" "$seat" -47.5 -8.5 3 >/dev/null
-    got=$("$LIB/act.sh" insert "$seat" x=-47.5 y=-8.5 name=coal count="$total_want" target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
-    echo "boiler feed(-47.5,-8.5): +${got} coal"
-  fi
+# Run 3: the old feed chest (-47.5,-8.5) is now a coal belt tile, which the burner
+# inserter (-48.5,-8.5) lifts from. A buffer chest (-50.5,-6.5) with its own burner
+# inserter (-50.5,-7.5, south->boiler) bridges until that belt carries coal. Keep the
+# buffer at TARGET coal and the boiler's own slot topped.
+chest_coal=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local c=game.surfaces[1].find_entity("iron-chest",{-50.5,-6.5}) rcon.print(c and c.get_inventory(defines.inventory.chest).get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+belt_coal=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local b=game.surfaces[1].find_entity("transport-belt",{-47.5,-8.5}) rcon.print(b and (b.get_transport_line(1).get_item_count("coal")+b.get_transport_line(2).get_item_count("coal")) or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+echo "boiler buffer chest(-50.5,-6.5): ${chest_coal} coal (target ${target}); coal on belt tile at inserter: ${belt_coal}"
+have_coal=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["coal"] // 0')
+give=$((target - chest_coal)); [ "$give" -gt "$have_coal" ] && give=$have_coal
+if [ "${chest_coal:-0}" -ge 0 ] && [ "$give" -gt 20 ] 2>/dev/null; then
+  "$LIB/walk.sh" "$seat" -49 -5 3 >/dev/null
+  got=$("$LIB/act.sh" insert "$seat" x=-50.5 y=-6.5 name=coal count="$give" target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
+  echo "buffer chest +${got} coal"
+  "$LIB/act.sh" insert "$seat" x=-50.5 y=-7.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1
+  "$LIB/act.sh" insert "$seat" x=-48.5 y=-8.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1
 fi
 
 echo "== ammo assembler upkeep (power block, same area) =="
-AMMO_ASM_TARGET=200
+AMMO_ASM_TARGET=400
 "$LIB/walk.sh" "$seat" -38 -4.5 4 >/dev/null
 "$LIB/act.sh" insert "$seat" x=-39.5 y=-4.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1
 "$LIB/act.sh" insert "$seat" x=-35.5 y=-4.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1

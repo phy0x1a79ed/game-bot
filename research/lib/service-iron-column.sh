@@ -107,7 +107,7 @@ done
 di=$("$LIB/act.sh" insert "$seat" x=-32 y=-44 name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
 fi=$("$LIB/act.sh" insert "$seat" x=-30 y=-44 name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
 oi=$("$LIB/act.sh" insert "$seat" x=-28.5 y=-44 name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-pt=$("$LIB/act.sh" take "$seat" x=-27.5 y=-44 name=iron-plate | jq -r '.taken // 0')
+pt=$("$LIB/act.sh" take "$seat" x=-27.5 y=-43.5 name=iron-plate target=iron-chest | jq -r '.taken // 0')
 total_coal_in=$((total_coal_in + di + fi + oi))
 total_plates=$((total_plates + pt))
 echo "reloc (-32,-44)/(-30,-44): drill+${di} furnace+${fi} out-inserter+${oi} coal, took ${pt} plates from output chest"
@@ -115,7 +115,7 @@ echo "reloc (-32,-44)/(-30,-44): drill+${di} furnace+${fi} out-inserter+${oi} co
 da=$("$LIB/act.sh" insert "$seat" x=-34 y=-42 name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
 fa=$("$LIB/act.sh" insert "$seat" x=-32 y=-42 name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
 oa=$("$LIB/act.sh" insert "$seat" x=-30.5 y=-42 name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-pa=$("$LIB/act.sh" take "$seat" x=-29.5 y=-42 name=iron-plate | jq -r '.taken // 0')
+pa=$("$LIB/act.sh" take "$seat" x=-29.5 y=-41.5 name=iron-plate target=iron-chest | jq -r '.taken // 0')
 total_coal_in=$((total_coal_in + da + fa + oa))
 total_plates=$((total_plates + pa))
 echo "module A (-34,-42)/(-32,-42): drill+${da} furnace+${fa} out-inserter+${oa} coal, took ${pa} plates from output chest"

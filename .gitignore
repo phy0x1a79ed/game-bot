@@ -3,3 +3,4 @@ __pycache__/
 .awm/
 research/.seat
 research/**/*.log
+research/crew/

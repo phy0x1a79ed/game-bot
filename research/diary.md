@@ -131,6 +131,125 @@ parallel took 2.7 seconds against 6.6 in series.
 
 ## Entries
 
+### 2026-10-02 — run 3: the same crew, from the run 2 end save
+
+Reloaded `shutdown-2026-09-26` at tick 919759. Lanes: upkeep and defense,
+coal, science, bus, and a researcher. Crew files live in `research/crew/`
+(gitignored), so handoffs survive the supervisor's job.
+
+**Base**
+
+- Iron is limited by demand, not supply. At tick 950000 the iron belt at
+  x=-19.5 was full from y=-63 to y=-7.5, every column furnace read
+  `full_output` and the electric drills waited for space. The column can make
+  about 131 plates/min (7 stone furnaces at 18.75), about 161 with the two
+  field modules. Science alone wants about 79.
+- A crash-site wreck sits on iron A at (-20.5,0.4), another on the circuit
+  lane at (-12.8,-1.0), and the spaceship (-13.7..1.9, -9.3..-1.5) clips the
+  circuit lane at y=-9..-2. Mine them before laying bus lanes south of
+  y=-10.
+- The upkeep loop burns more coal than coal ring 1 nets: its chests fell from
+  about 1100 to 740 in one cycle, while the feeder chains' belt sat backed up.
+- CAUTION: never remove a machine's feed before its replacement carries
+  items. The coal builder swapped the boiler's feed chest for the end of the
+  coal belt while the belt was still empty, and the base blacked out within
+  minutes (tick 969000). A boiler's fuel slot holds 50 coal, about 2 minutes
+  at 1.5 MW, so a 10-minute upkeep cycle cannot cover a boiler by hand.
+
+**Coal belt and copper collector** (both built by tick 990000)
+
+- Coal rides 168 tiles from the feeder chains to the boiler with nobody
+  hand-feeding: south on x=79.5 from y=-46.5 to y=-26.5, west on y=-26.5 to
+  x=-49.5, south to y=-16.5, east to x=-48.5, south down the gap to y=-9.5,
+  then east to the belt end (-47.5,-8.5), where the burner inserter
+  (-48.5,-8.5) lifts coal into the boiler. The boiler holds only 4 to 5 coal
+  that way, so supply must stay ahead of burn: 2 chains make about 30
+  coal/min, and the boiler burned 18/min while the base restarted.
+- The coal belt crosses the bus underground from (-17.5,-26.5) to
+  (-20.5,-26.5), under iron A and the iron B slot. It occupies y=-26.5 on the
+  surface at x=-16.5..-9.5, so the copper, gear and circuit lanes must end
+  south of y=-26 or cross it underground.
+- The only way into the boiler pocket is the x=-48.5 gap between engine 2 and
+  lab 1. The turret at (-48,-18) blocks it at y=-19..-17, hence the jog.
+- Power block 2 sits on the north shore, fed straight off the coal belt's
+  x=-49.5 leg: offshore pump (-69.5,-21.5) facing west, pipes along y=-22.5,
+  boiler (-52,-20.5) facing west, steam pipe (-53.5,-20.5), engines
+  (-56.5,-20.5) and (-61.5,-20.5), electric inserter (-50.5,-20.5). A boiler
+  facing west takes water at its north and south ends and puts steam out at
+  its west end. Engines chain end to end with no pipe between them.
+- Each feeder chain's head drill is never refuelled by the chain. Its 50-coal
+  prime lasts hours, but a head found at 2 coal would have starved its chain.
+  Three chains (heads at (78,-50), (78,-42), (78,-30)) make about 44
+  coal/min; two boilers at full load burn 54. The coal east of the belt is
+  too thin for a fourth chain.
+- `act.sh craft` counts crafts, not items: 190 belt crafts made 380 belts.
+- The copper collector: 8 electric drills on the rich core feed 8 stone
+  furnaces, whose 8 electric inserters drop onto a belt north on x=18.5 from
+  y=65.5 to 52.5, west on y=51.5 to x=-16.5, then north on x=-16.5 to
+  (-16.5,-5.5), side-loading row y=-6.5. Row y=-6.5 is copper only; iron must
+  not re-enter it.
+- Iron C feeds the green line: a splitter at (-20,-12.5) on iron A, a belt
+  down x=-20.5, under rows -7.5 and -6.5 to (-20.5,-5.5), west along y=-2.5,
+  under the green belt from (-27.5,-2.5) to (-29.5,-2.5), then on y=-2.5 from
+  x=-30.5 to -42.5. The green line's inserters at y=-1.5 take iron from it
+  directly.
+
+- Iron B leaves the splitter at (-19,-8.5) by its east output, passes under
+  row y=-6.5 from (-18.5,-7.5) to (-18.5,-5.5), runs south on x=-18.5 to
+  y=12.5, and crosses under the copper lane from (-17.5,12.5) to
+  (-15.5,12.5) into the feed row F at (-14.5,14.5).
+- Feed row F (y=14.5) carries iron on its north lane and copper on its
+  south lane. A side-load lands on one lane only when a belt sits behind
+  the receiving tile: F's first tile has an empty dummy belt at
+  (-15.5,14.5). Without it the same layout forms a curve and fills both
+  lanes.
+- The 3:2 circuit block north of F: cable assemblers at x=-11.5, -3.5 and
+  4.5, circuit assemblers at x=-7.5 and 0.5, all at y=11.5. It made about 85
+  circuits/min. A gear assembler at (-10.5,17.5) makes about 60 gears/min
+  into the chest (-11.5,20.5).
+- A small pole in the 1-tile gap between two assemblers, on their centre
+  row, powers both assemblers, the gap inserters on the rows above and
+  below, the output inserter and the feed inserters. An inserter 1 tile past
+  the pole's 5x5 square reads `no_power`.
+- 21 trees stand just south of the copper field (x=-2..19, y=72..89), 1 wood
+  each. `lib/mine-trees.sh` took 9 wood in under a minute.
+- `lib/walk.sh` retries forever when the target tile lies inside a
+  machine's footprint. Walk to a tile outside it.
+- A furnace's result inventory is `defines.inventory.crafter_output`.
+
+**Science** (tick 1016000)
+
+- The green line runs with no hand stocking: iron by the iron C belt,
+  intermediates between its assemblers by belt, copper by the row y=-6.5
+  stub, and packs by belt along y=9.5 to x=-28.5 and on to the labs. Every
+  lab takes red and green by inserter off a belt.
+- Labs are the limit, not packs. 3 labs at 30 s per unit eat 6 of each pack
+  a minute. Green makes 10 a minute and red can make 12, so green sat 40%
+  idle.
+- No red-only tech is left after `logistic-science-pack`: every ready tech
+  needs green too, so the red-first rule waits for chemical science. The
+  research queue takes at most 7 entries; `add_research` errors past that.
+
+**Defense**
+
+- A seat repairs through the player interface. `repair_state` is per-tick
+  input like `mining_state`, so a one-shot `exec_lua` does nothing.
+  `lib/repair.sh` puts a repair pack on the cursor and re-asserts the
+  selection and `repair_state` every tick until the entity is whole. A
+  furnace at 46 of 200 health took 78 of a pack's 300 durability.
+  `lib/ammo.sh SEAT [TARGET]` tops turrets up from the seat's inventory.
+- At tick 1009000 the pollution cloud reached the nests: spawners absorbed
+  12.6 of 286 pollution/min, and the cloud's edge sat 16 tiles from the
+  north nest at (-17,-237). Evolution rose about 0.02 an hour (0.077 at tick
+  920000, 0.086 at 1004000), so medium biters (0.2) are hours away and
+  yellow ammo holds.
+- Turret gaps at tick 1010000: the mall and circuit block had none within
+  33 tiles, the copper field's south edge none, power block 2 one.
+- The north line is a segment, not a perimeter. Expansion can place a new
+  nest as close as y=-77, on it.
+- The north wall at y=-71.5 is continuous from x=-33.5 to -14.5. The run 2
+  note of a gap at x=-34..-30 was wrong by tick 919759.
+
 ### 2026-09-26 — a crew of three builders under a supervisor
 
 World seed 1234567, save lineage `red-ladder-coal-ring`. Started at tick 396724
@@ -298,11 +417,15 @@ reloaded tick 415000 and played defense-first with scripted actions.
   facing. A splitter facing south with priority `right` fills its west output
   first. Test the side on a small rig before relying on it.
 - An underground belt reaches 5 tiles here (`max_underground_distance`).
-- CAUTION: the `build` verb always makes an underground belt an input end.
-  Build the exit with the direction opposite to the entrance: entrance north,
-  exit south, or call `.rotate()` on the exit after building it. Two ends
-  with the same direction form a dead pair that holds items forever without
-  an error.
+- CAUTION: build an underground exit with the direction opposite to the
+  flow: entrance north, exit south. The engine then makes the exit an output
+  that reads north, and a live pair reads input D + output D. Never
+  `.rotate()` the exit afterwards: rotating flips the output to the wrong
+  direction. An exit built with the flow's direction becomes a second input.
+  Both mistakes form a dead pair that holds items forever without an error.
+  Check `belt_to_ground_type` and `direction` on both ends. (Corrected
+  2026-10-02: the earlier advice to rotate left three dead pairs on the
+  science rows, and iron stalled there.)
 - A belt tile moves items only in its own facing direction. A corner does not
   turn to meet its neighbour. Set every corner's direction explicitly. Confirm
   flow by reading items on the transport line, not by build success.
