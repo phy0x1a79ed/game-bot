@@ -137,6 +137,36 @@ Reloaded `shutdown-2026-09-26` at tick 919759. Lanes: upkeep and defense,
 coal, science, bus, and a researcher. Crew files live in `research/crew/`
 (gitignored), so handoffs survive the supervisor's job.
 
+**End state** (tick 1225113, save `run3-session-end-t1225113`, paused)
+
+- Iron: 13 steel furnaces on electric drills, about 420 plates/min, more
+  than the base uses. Copper: 8 electric modules, 150/min, self-fuelling.
+  Coal: 6 electric drills on a belt to every boiler. Steel: 2 furnaces.
+- Power: 3 boilers, 6 engines, 5.4 MW capacity, about 2.3 MW drawn.
+- Science: 6 labs at 14.4 units/min, red 18 and green 15.4 packs/min, all
+  by belt. 25 techs researched; the queue holds weapon-shooting-speed-2,
+  toolbelt, research-speed-2, stronger-explosives-1, military-science-pack
+  and engine.
+- Mall: 2 rows run unattended. Circuit block idle on a capped stock.
+- Defense: 43 turrets, evolution 0.115, small biters only. N1 waves of
+  about 90 every ~9 game minutes; SW and W groups of 40-77.
+
+**Next, in order.** Handoffs in `research/crew/HANDOFF-<lane>.md` hold the
+coordinates.
+
+1. Extend the north wall east from x=-14.5 to about x=-8.5 and turn it
+   south, then rebuild (-14,-68). The outermost turret at the open end dies
+   every wave.
+2. Wall west of the pump (-69.5,-21.5); the power-block corner has 3
+   overlapping turrets (-66,-25), (-63,-28), (-66,-21). Repair (-16,-66) and
+   (-40,-60), and bring the ~20-magazine turrets (mall south and east,
+   copper field, coal patch) to 30+.
+3. Feed the ammo assembler (-37.5,-4.5) with electric inserters; burner
+   inserters cap it at 9 magazines/min.
+4. Spend the iron surplus: a 4th green assembler (AM2), a 7th lab, fast
+   inserters on the circuit block outputs (-7.5,9.5),(0.5,9.5).
+5. Chemical science (oil) is the next milestone.
+
 **Base**
 
 - Iron is limited by demand, not supply. At tick 950000 the iron belt at
@@ -390,6 +420,12 @@ coal, science, bus, and a researcher. Crew files live in `research/crew/`
 - The ammo assembler (-37.5,-4.5) is fed by burner inserters at about 36
   iron/min, so it makes about 9 magazines/min, not its 30. Insert iron
   straight into the assembler when waves grow.
+- A seat can die. It respawns empty at (-0.6,-0.6), and its corpse keeps
+  the inventory: `take target=character-corpse`, one item name per call.
+  From the respawn point `walk.sh` jams on the crash wreck (-12.8,-1.0);
+  walk to (-9,1) and (-14.4,1.8) first.
+- `lib/repair.sh` walks to the nearest damaged entity anywhere on the map,
+  not only near the seat.
 - Both radars are mined (300 kW each, and no script reads them).
 - Turrets added by tick 1065000: mall (-22,10), (-22,17), (-2,25), (12,25),
   (29,16); green science (-27,9); copper field south (17,69), (24,69); power
