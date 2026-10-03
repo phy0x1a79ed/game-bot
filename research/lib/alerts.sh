@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Usage: alerts.sh SEAT [INTERVAL]. Prints NEW/CLEAR alert lines; an alert must persist 2 polls.
+# One poll = two calls (alerts.lua machines, alerts-b.lua the rest), each kept near the 15 ms script budget.
 seat=$1; interval=${2:-60}
 dir=$(cd "$(dirname "$0")" && pwd)
 state=$(mktemp -d)
 touch "$state/prev" "$state/shown"
 while true; do
-  cur=$("$dir/act.sh" exec_lua "$seat" path="$dir/alerts.lua" | jq -r '.output // empty' 2>/dev/null | sort -u)
+  cur=$({ "$dir/act.sh" exec_lua "$seat" path="$dir/alerts.lua" budget_ms=30; "$dir/act.sh" exec_lua "$seat" path="$dir/alerts-b.lua"; } | jq -r '.output // empty' 2>/dev/null | sort -u)
   if [ -f "$dir/upkeep.log" ] && [ -n "$(find "$dir/upkeep.log" -mmin +15)" ]; then
     cur=$(printf '%s\nUPKEEP-STALE upkeep.log unchanged for 15+ min' "$cur" | sort -u)
   fi
