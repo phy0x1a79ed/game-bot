@@ -23,15 +23,17 @@ echo "copper furnace coal levels: $levels"
 IFS=',' read -ra pairs_ <<< "$levels"
 lv=(); names=()
 for pr in "${pairs_[@]}"; do lv+=("${pr%%:*}"); names+=("${pr#*:}"); done
-low=0; for l in "${lv[@]}"; do [ "$l" -ge 0 ] && [ "$l" -lt 30 ] && low=1; done
-[ "$low" = 0 ] && { echo "all copper furnaces at 30+ coal, skipping"; exit 0; }
+# Rescue only: belt fuel inserters refill a furnace near ~5 coal, so a higher
+# threshold beats the belt to it every cycle and hides whether the belt keeps up.
+low=0; for l in "${lv[@]}"; do [ "$l" -ge 0 ] && [ "$l" -lt 3 ] && low=1; done
+[ "$low" = 0 ] && { echo "all copper furnaces at 3+ coal, skipping"; exit 0; }
 
 "$LIB/walk.sh" "$seat" "$STAND_X" "$STAND_Y" 3 >/dev/null
 i=0; total=0
 for f in "${FURNACES[@]}"; do
   set -- $f
   need=$(( TARGET - ${lv[$i]:-0} ))
-  if [ "${lv[$i]:--1}" -ge 0 ] && [ "$need" -gt 0 ]; then
+  if [ "${lv[$i]:--1}" -ge 0 ] && [ "${lv[$i]}" -lt 3 ] && [ "$need" -gt 0 ]; then
     res=$("$LIB/act.sh" insert "$seat" x="$1" y="$2" name=coal count="$need" target="${names[$i]}" 2>&1)
     got=$(jq -r '.inserted // 0' <<< "$res" 2>/dev/null)
     [ "${got:-0}" = "0" ] && echo "  copper furnace ($1,$2) at ${lv[$i]} coal: insert failed: $(tr -d '\n' <<< "$res" | head -c 300)"
