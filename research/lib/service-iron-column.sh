@@ -160,10 +160,10 @@ done
 total_coal_in=$((total_coal_in + strip_in))
 echo "east strip furnaces (-10,y),(-15,-48): +${strip_in} coal"
 
-# sweep: any burner furnace or burner drill in the home iron area still under 3
+# sweep: any burner furnace or burner drill in the home iron area, bank 2 and the steel line still under 3
 # coal after the named stops above (catches modules nobody listed here). Belt-fed
 # furnaces idle at about 5 coal, so a higher threshold would hand-feed them too.
-low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local o={} for _,e in pairs(game.surfaces[1].find_entities_filtered{area={{-50,-70},{0,-25}},type={'furnace','mining-drill'}}) do local fi=e.get_fuel_inventory() if fi then local c=fi.get_item_count('coal') if c<3 then local q=game.surfaces[1].find_non_colliding_position('character',e.position,4,0.5) if q then o[#o+1]=string.format('%s,%.1f,%.1f,%d,%.1f,%.1f',e.name,e.position.x,e.position.y,c,q.x,q.y) end end end end rcon.print(table.concat(o,';'))" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
+low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local o={} for _,e in pairs(game.surfaces[1].find_entities_filtered{area={{-50,-70},{45,-25}},type={'furnace','mining-drill'}}) do local fi=e.get_fuel_inventory() if fi then local c=fi.get_item_count('coal') if c<3 then local q=game.surfaces[1].find_non_colliding_position('character',e.position,4,0.5) if q then o[#o+1]=string.format('%s,%.1f,%.1f,%d,%.1f,%.1f',e.name,e.position.x,e.position.y,c,q.x,q.y) end end end end rcon.print(table.concat(o,';'))" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
 sweep_in=0
 if [ -n "$low" ]; then
   IFS=';' read -ra lows <<< "$low"
