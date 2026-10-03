@@ -25,6 +25,27 @@ if [ "${chest_coal:-0}" -ge 0 ] && [ "$give" -gt 20 ] 2>/dev/null; then
   "$LIB/act.sh" insert "$seat" x=-48.5 y=-8.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1
 fi
 
+# Every boiler under 10 coal gets topped to 30. Belt-fed boilers idle above 10,
+# so this only fires when a feed has failed -- and a brownout slows the electric
+# coal drills that feed them, which is a spiral nothing else breaks.
+LUA_BOILERS='local o={} for _,b in pairs(game.surfaces[1].find_entities_filtered{type="boiler",force="player"}) do local c=b.get_fuel_inventory().get_item_count("coal") if c<10 then local s=game.surfaces[1].find_non_colliding_position("character",b.position,4,0.5) if s then o[#o+1]=string.format("%.1f,%.1f,%d,%.1f,%.1f",b.position.x,b.position.y,c,s.x,s.y) end end end rcon.print(table.concat(o,";"))'
+dry=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_BOILERS" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
+boiler_in=0
+if [ -n "$dry" ]; then
+  IFS=';' read -ra dry_list <<< "$dry"
+  for d in "${dry_list[@]}"; do
+    IFS=',' read -r bx by bc sx sy <<< "$d"
+    have_coal=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["coal"] // 0')
+    [ "${have_coal:-0}" -lt 10 ] 2>/dev/null && { echo "  boiler ($bx,$by) at $bc coal: none on hand"; continue; }
+    give=$((30 - bc)); [ "$give" -gt "$have_coal" ] && give=$have_coal
+    "$LIB/walk.sh" "$seat" "$sx" "$sy" 2 >/dev/null 2>&1
+    got=$("$LIB/act.sh" insert "$seat" x="$bx" y="$by" name=coal count="$give" target=boiler 2>/dev/null | jq -r '.inserted // 0')
+    echo "  boiler ($bx,$by) at $bc coal: +${got}"
+    boiler_in=$((boiler_in + got))
+  done
+fi
+echo "boilers under 10 coal: +${boiler_in} coal"
+
 echo "== ammo assembler upkeep (power block, same area) =="
 AMMO_ASM_TARGET=400
 "$LIB/walk.sh" "$seat" -38 -4.5 4 >/dev/null

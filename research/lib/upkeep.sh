@@ -14,7 +14,7 @@
 #   boiler feed (-47.5,-8.5), ammo assembler in/out (-40.5,-4.5)/(-34.5,-4.5)
 #   green-line chests: copper(-46.5,-2.5), iron(-42.5,-2.5)/(-38.5,-2.5)/
 #     (-34.5,-2.5)/(-30.5,-2.5)
-#   stone drill (60,-30) + chest (59.5,-31.5)
+#   brick line: electric drill (59.5,-28.5) -> stone furnace (59,-31) -> chest (59.5,-33.5)
 #   red-asm copper chests (-42.5,-8.5)/(-34.5,-8.5) -- serviced inside
 #     service-copper.sh's delivery step
 set -u
@@ -120,12 +120,10 @@ while true; do
     have_coal=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["coal"] // 0')
     if [ "${have_coal:-0}" -ge 20 ] 2>/dev/null; then
       "$LIB/walk.sh" "$seat" 61 -30 3 >/dev/null
-      ins=$("$LIB/act.sh" insert "$seat" x=60 y=-30 name=coal count=30 target=burner-mining-drill 2>/dev/null | jq -r '.inserted // 0')
-      echo "  stone drill(60,-30): +${ins} coal"
-      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("stone-furnace",{59,-34}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("stone-furnace",{59,-31}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
       if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
-        ins=$("$LIB/act.sh" insert "$seat" x=59 y=-34 name=coal count=$((50 - lvl)) target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
-        echo "  brick furnace(59,-34): was ${lvl}, +${ins} coal"
+        ins=$("$LIB/act.sh" insert "$seat" x=59 y=-31 name=coal count=$((50 - lvl)) target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
+        echo "  brick furnace(59,-31): was ${lvl}, +${ins} coal"
       fi
     fi
   fi
