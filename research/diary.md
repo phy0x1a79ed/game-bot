@@ -136,7 +136,7 @@ parallel took 2.7 seconds against 6.6 in series.
 Unpaused the run 3 end save at tick 1225470. Space Age 2.1.20 is active, so the
 game is won at the solar system edge; this run aims at the first rocket. Plan:
 `~/.claude/plans/factorio-run4.md`. Saves: `run4-oil-processing`,
-`run4-oil-park`, `run4-first-blue`.
+`run4-oil-park`, `run4-first-blue`, `run4-n-field`.
 
 **Seats**
 
@@ -180,6 +180,19 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
 - Offshore pump: the build direction is the water side. `can_place_entity`
   reads true everywhere for pumps; try `build` positions and directions until
   one lands.
+- A connected fluid system of more than about 110-120 fluidbox entities
+  freezes in this build: readings stay constant and nothing flows, with the
+  pipe full. Every pipe-to-ground counts. Split a long line into separate
+  systems with pumps; a pump is a system boundary.
+- N field (tick 1645k): pumpjacks W1-W4 at (-224.5,-307.5) (-232.5,-302.5)
+  (-221.5,-300.5) (-232.5,-307.5), about 87 crude/s. 8 turrets and a wall at
+  y=-315.5. Pipeline about 580 tiles: y=-296.5 east, x=-113.5 south, y=-80.5
+  east, x=53.5 south to (53.5,-8.5). Pumps P1 (-113.5,-174) and P2 (55,-8.5).
+  Power: 12 big poles on the diagonal from (-37,-67) to (-221,-297). R2
+  (54.5,-4.5). Crude is no longer the cap; PG use is.
+- A mass of about 80 small biters stages at (-48,-211). Seats died twice near
+  (-57,-80) on the way north.
+- Engine units cannot be hand-crafted; they need an assembling machine 2.
 
 **Power**
 
@@ -223,6 +236,10 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   piercing lands in the main inventory, so `insert` works. A turret holds one
   ammo kind: take its yellow out before inserting piercing.
 - An inserter's build direction names its pickup side.
+- A pipe one tile inside a wall dies with the wall: block 4's water pipe was
+  cut twice. Run pipes behind a wall underground.
+- The north wall's east corner and the iron column's NW flank lose a turret to
+  most waves; both are now walled groups of six.
 
 **Science**
 
@@ -237,6 +254,14 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   buffers on the belt, and put blue techs first once blue passes 10/min.
 - A fast tech (10 s per unit) empties green: 8 labs want about 48 green/min
   against 22 made. Long techs (30-60 s) do not.
+- Blue module 2 (tick 1618k) mirrors module 1 about y=18.5 with its own
+  plastic and sulfur plants: two modules make 7.6 packs/min. The pack
+  assembler caps each module at about 3.75/min. Iron comes off belt P, and
+  coal rides P's free lane to self-fuel the module's steel furnace.
+- Lab-belt tail trap: when the research needs a pack the tail lacks, the tail
+  fills with the other pack on both lanes and the missing one never arrives.
+  A long-handed inserter over a one-tile underground gap hands packs lab to
+  lab across a belt. 10 labs read fully fed at tick 1671k.
 
 ### 2026-10-02 — run 3: the same crew, from the run 2 end save
 
