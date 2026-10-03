@@ -131,6 +131,104 @@ parallel took 2.7 seconds against 6.6 in series.
 
 ## Entries
 
+### 2026-10-03 — run 4 post-mortem: why 16 hours bought so little
+
+A review of the overnight crew run (tick 2.06M to 5.58M, 16.6 wall-hours, six
+lead sessions and 258 subagents). Sources: the closeout save loaded as a
+scratch copy, the session transcripts, and the crew logs. Scratch save with the
+test bench: `run4-postmortem-bench`.
+
+**State at close** (tick 5.65M, 26.2 game-hours)
+
+- 131 techs. No rocket, no processing unit ever made, no utility science.
+- 288 assemblers: 53 working, 151 output-blocked, 80 short of an ingredient.
+- Lifetime: 1.31M iron plates. 1,471 gun turrets built and 704 lost. 107k
+  magazines. 42 character deaths. Ammo and turrets took about 40% of all iron.
+- Lifetime building output: 223 assembling-machine-2, 337 electric drills, 225
+  steel furnaces, 57 roboports, 637 construction robots.
+- Only 11 of 1,191 spawners sat in pollution. The losses came from nest pushes
+  and expansion parties, not from pollution attacks.
+
+**Where the time went**
+
+- The crew made 2,868 game-changing calls in 16.6 hours, about 3 per minute
+  across 6 busy workers. Each one cost 7.4 model calls and 5.9k output tokens.
+- 41% of agent-hours were idle. At least 32.6 of 67.6 tool-hours were sleeps,
+  polls and waits. Model turns took 4.6 s at the median, so model speed did not
+  bind.
+- A Lua round trip takes about 10 ms through `/invoke`. The interface did not
+  bind either, except from 01:30 to 03:30 when calls queued for 10 s.
+- Building supply bound. Roboport stock sat at zero from 00:41 to 13:52. At
+  02:27 there were 10 construction robots against about 942 ghosts. The mall
+  was demoted at 01:34 and its stock floors were never built.
+- Labs worked 42% of the time. Production science started 3 hours after its
+  tech finished, and the queue ran dry twice.
+- 31% of the subagents that touched the game never changed it.
+
+**No design was reused**
+
+- The scripts named "cell" and "module" are one-off builds at absolute
+  coordinates. Blue science was designed three times and copper four.
+- Blueprints were never captured or stamped. The board never mentions them.
+- Chunk exits were rates read twice. Blue was accepted at 40/min and read 16.7
+  five hours later. Nothing recorded how a design performed after its exit.
+- The designs themselves were sound. On the bench the red/green block rated 63
+  red and 57 green per minute. In the live base it delivered about 25.
+
+**What the realm already allows**
+
+- `blueprint_capture` took the red/green block (362 entities) in one call.
+  `blueprint_stamp` placed it as ghosts in 0.66 s. The robot network built it
+  in under 6 game-minutes.
+- The headless server holds about 780 updates per second on this base, 13
+  times real time. It holds about 730 with one seat connected. Set
+  `game.speed` by Lua.
+- Reads work while `game.tick_paused` is true. The crew never paused and never
+  changed speed, so the game clock ran through every model turn.
+- A capture returns a standard blueprint string, so community strings stamp
+  too.
+
+**Test bench** (`lib/bench-redgreen.lua`, `lib/bench-read.lua`)
+
+- The bench builds a design on an empty surface with free inputs and voided
+  outputs. A rating takes about 30 seconds of wall time at speed 64.
+- **CAUTION** A design must declare what crosses its boundary. The first bench
+  run showed green at zero because the capture rectangle cut off one feeder
+  inserter. `lib/bench-ports.lua` lists the belts that cross a rectangle.
+- The bench creates entities and items. Run it on a scratch copy of a save.
+
+**Human practice, for comparison** (web research, 2026-10-03)
+
+- Megabase players keep the Nauvis starter small (30 to 120 science per
+  minute), leave for the off-planet scaling tech, and rebuild on return.
+- They design one block, test it, and stamp it many times from remote view.
+  Logistics varies by player: trains with belt strips, a one-way rail loop,
+  independent islands, city blocks.
+- They make defence cheap early or switch enemies off.
+
+**Suggestions for the next run** (not adopted yet)
+
+1. Clock the game to decisions. Pause while the agent thinks. Fast-forward
+   through waits.
+2. Score a target that compounds, such as sustained science doubling each
+   period, over a long window.
+3. Keep a wait log: every item a ghost, a machine or an agent waited on, by
+   item. The largest entry is the next project. Allow hand crafting and log it
+   in the same list.
+4. Keep a design library. Tag every stamped copy with its design and version.
+   Report rated against measured output per version.
+5. Rate every design on the bench before it enters the library.
+6. Report game-changing calls and tokens per game-hour to the agent.
+7. Test with a short A/B from one save: one Opus and one Sonnet for two
+   game-hours, with and without items 3 to 5.
+
+The user's aim (2026-10-03): module design and iteration should emerge from
+the directive, and so should designed logistics. Do not hand the agent a
+layout, or every run builds the same base.
+
+Transcript accounting scripts: `lib/run4_parse.py`, `lib/run4_report.py`,
+`lib/run4_extras.py`.
+
 ### 2026-10-02 — run 4: oil, blue science and the road to the rocket
 
 Unpaused the run 3 end save at tick 1225470. Space Age 2.1.20 is active, so the
