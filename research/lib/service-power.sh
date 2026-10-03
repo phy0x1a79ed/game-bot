@@ -25,10 +25,12 @@ if [ "${chest_coal:-0}" -ge 0 ] && [ "$give" -gt 20 ] 2>/dev/null; then
   "$LIB/act.sh" insert "$seat" x=-48.5 y=-8.5 name=coal count=5 target=burner-inserter >/dev/null 2>&1
 fi
 
-# Every boiler under 10 coal gets topped to 30. Belt-fed boilers idle above 10,
-# so this only fires when a feed has failed -- and a brownout slows the electric
-# coal drills that feed them, which is a spiral nothing else breaks.
-LUA_BOILERS='local o={} for _,b in pairs(game.surfaces[1].find_entities_filtered{type="boiler",force="player"}) do local c=b.get_fuel_inventory().get_item_count("coal") if c<10 then local s=game.surfaces[1].find_non_colliding_position("character",b.position,4,0.5) if s and s.x>-48 and s.x<-38 and s.y>-32.5 and s.y<-29.5 then s=game.surfaces[1].find_non_colliding_position("character",{b.position.x,b.position.y-4},2,0.5) end if s then o[#o+1]=string.format("%.1f,%.1f,%d,%.1f,%.1f",b.position.x,b.position.y,c,s.x,s.y) end end end rcon.print(table.concat(o,";"))'
+# A boiler that is out of fuel (status no_fuel, or 0 coal) gets topped to 30.
+# Belt-fed boilers idle at ~5 coal, so a higher threshold hand-fed all of them every
+# cycle and hid whether the belts keep up. Out-of-fuel still needs a rescue: a
+# brownout slows the electric coal drills that feed the boilers, a spiral nothing
+# else breaks.
+LUA_BOILERS='local o={} for _,b in pairs(game.surfaces[1].find_entities_filtered{type="boiler",force="player"}) do local c=b.get_fuel_inventory().get_item_count("coal") if c<1 or b.status==defines.entity_status.no_fuel then local s=game.surfaces[1].find_non_colliding_position("character",b.position,4,0.5) if s and s.x>-48 and s.x<-38 and s.y>-32.5 and s.y<-29.5 then s=game.surfaces[1].find_non_colliding_position("character",{b.position.x,b.position.y-4},2,0.5) end if s then o[#o+1]=string.format("%.1f,%.1f,%d,%.1f,%.1f",b.position.x,b.position.y,c,s.x,s.y) end end end rcon.print(table.concat(o,";"))'
 dry=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_BOILERS" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
 boiler_in=0
 if [ -n "$dry" ]; then
@@ -44,7 +46,7 @@ if [ -n "$dry" ]; then
     boiler_in=$((boiler_in + got))
   done
 fi
-echo "boilers under 10 coal: +${boiler_in} coal"
+echo "boilers out of fuel: +${boiler_in} coal"
 
 echo "== ammo assembler upkeep (power block, same area) =="
 AMMO_ASM_TARGET=400
