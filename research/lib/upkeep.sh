@@ -1,91 +1,20 @@
 #!/usr/bin/env bash
 # upkeep.sh SEAT [INTERVAL_S]
-# The unified maintenance loop for the defense/upkeep lane (2026-09-26 role
-# change): one pass covers coal hauling, the iron column burner rescue, power
-# (boiler rescue + magazine pickup) and turret ammo top-ups -- then sleeps INTERVAL_S (default 600 =
-# ~10 game minutes at 1x) and repeats. Logs to upkeep.log beside this script.
-# Stop with `kill <pid>` (pid is echoed on start, or `pgrep -f upkeep.sh`).
-#
-# Coordinates owned (see BOARD.md for full history):
-#   coal ring 1: 4 chests around (67-73,-37 to -44)
-#   iron column: see service-iron-column.sh header
-#   ammo assembler output (-34.5,-4.5): magazines for turret top-ups
+# The maintenance loop: repair only. Coal hauls, the iron column burner rescue,
+# the boiler rescue and the turret top-ups were cut once belts and robots
+# covered them (2026-10-03). Sleeps INTERVAL_S and repeats; logs to upkeep.log
+# beside this script. Stop with `kill <pid>` (`pgrep -f upkeep.sh`).
 set -u
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
 interval=${2:-600}
 [ -z "$seat" ] && { echo "usage: upkeep.sh SEAT [interval_s]"; exit 1; }
 
-COAL_FLOOR=200
-RING_STOPS=(
-  "69 -44 69.5 -42.5 60"
-  "73 -40.5 72.5 -40.5 60"
-  "71 -36.5 70.5 -37.5 60"
-  "66 -39 67.5 -39.5 60"
-)
-
 echo "upkeep.sh started for $seat, interval=${interval}s, pid=$$"
-
-# coal_topup: haul from ring1 up to COAL_FLOOR coal-on-hand, if not already
-# there. Called before EVERY section that spends coal (iron column, copper,
-# stone drill) -- each section can fully drain what an earlier section left,
-# so a single haul at the top of the pass is not enough (2026-09-26: this is
-# what starved copper modules 5/6's drills and output inserters dry while the
-# iron column silently ate the whole coal-check haul first).
-coal_topup() {
-  "$LIB/service-coal.sh" "$seat" "$COAL_FLOOR"
-}
 
 while true; do
   t0=$(date +%s)
   echo "=== cycle $(date -Iseconds) ==="
-
-  echo "-- coal check (pre iron-column) --"
-  coal_topup
-
-  echo "-- iron column burner rescue --"
-  "$LIB/service-iron-column.sh" "$seat"
-
-  echo "-- depot: iron above 1500 on hand --"
-  have_iron=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["iron-plate"] // 0')
-  if [ "${have_iron:-0}" -gt 1700 ] 2>/dev/null; then
-    "$LIB/walk.sh" "$seat" 0.5 -21 3 >/dev/null 2>&1
-    got=$("$LIB/act.sh" insert "$seat" x=0.5 y=-19.5 name=iron-plate count=$((have_iron - 1500)) target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
-    echo "  depot iron +${got}"
-  fi
-
-  echo "-- coal check (pre power) --"
-  coal_topup
-
-  echo "-- power (boiler rescue + magazine pickup) --"
-  "$LIB/service-power.sh" "$seat"
-
-  echo "-- patrol + turret top-up --"
-  "$LIB/patrol.sh" "$seat"
-  LUA_LOW='
-local out = {}
-for _, e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="player", name="gun-turret"}) do
-  local inv = e.get_inventory(defines.inventory.turret_ammo)
-  local ammo = inv.get_item_count()
-  local yellow = ammo == inv.get_item_count("firearm-magazine")
-  local mine = not (e.last_user and e.last_user.name == "Phyberosis") and e.position.x^2 + e.position.y^2 < 230^2
-  if mine and yellow and ammo < 8 then out[#out+1] = string.format("%.0f,%.0f", e.position.x, e.position.y) end
-end
-rcon.print(table.concat(out, ";"))
-'
-  low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_LOW" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
-  if [ -n "$low" ]; then
-    IFS=';' read -ra spots <<< "$low"
-    for spot in "${spots[@]}"; do
-      IFS=',' read -r tx ty <<< "$spot"
-      have_mag=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["firearm-magazine"] // 0')
-      if [ "${have_mag:-0}" -gt 0 ] 2>/dev/null; then
-        "$LIB/walk.sh" "$seat" "$tx" "$ty" 4 >/dev/null
-        got=$("$LIB/act.sh" insert "$seat" x="$tx" y="$ty" name=firearm-magazine count=20 target=gun-turret 2>/dev/null | jq -r '.inserted // 0')
-        echo "  topped turret($tx,$ty): +${got} magazines"
-      fi
-    done
-  fi
 
   echo "-- repair --"
   "$LIB/repair.sh" "$seat" 10
