@@ -121,7 +121,9 @@ for y in "${WEST_YS[@]}"; do
   lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={-34,$y},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
   need=$((50 - lvl))
   if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
-    fi=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target="$(furnace_name -34 "$y")" | jq -r '.inserted // 0')
+    res=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target="$(furnace_name -34 "$y")")
+    fi=$(jq -r '.inserted // 0' <<< "$res")
+    [ "${fi:-0}" = "0" ] && echo "  west furnace (-34,$y) at $lvl coal: insert failed: $(head -c 200 <<< "$res")"
     west_in=$((west_in + fi))
   fi
 done
@@ -157,6 +159,24 @@ for xy in "-10 -55" "-10 -52" "-10 -49" "-15 -48"; do
 done
 total_coal_in=$((total_coal_in + strip_in))
 echo "east strip furnaces (-10,y),(-15,-48): +${strip_in} coal"
+
+# sweep: any burner furnace or burner drill in the home iron area still under 3
+# coal after the named stops above (catches modules nobody listed here). Belt-fed
+# furnaces idle at about 5 coal, so a higher threshold would hand-feed them too.
+low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local o={} for _,e in pairs(game.surfaces[1].find_entities_filtered{area={{-50,-70},{0,-25}},type={'furnace','mining-drill'}}) do local fi=e.get_fuel_inventory() if fi then local c=fi.get_item_count('coal') if c<3 then local q=game.surfaces[1].find_non_colliding_position('character',e.position,4,0.5) if q then o[#o+1]=string.format('%s,%.1f,%.1f,%d,%.1f,%.1f',e.name,e.position.x,e.position.y,c,q.x,q.y) end end end end rcon.print(table.concat(o,';'))" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
+sweep_in=0
+if [ -n "$low" ]; then
+  IFS=';' read -ra lows <<< "$low"
+  for it in "${lows[@]}"; do
+    IFS=',' read -r nm ex ey lvl sx sy <<< "$it"
+    "$LIB/walk.sh" "$seat" "$sx" "$sy" 1 >/dev/null 2>&1
+    got=$("$LIB/act.sh" insert "$seat" x="$ex" y="$ey" name=coal count=$((50 - lvl)) target="$nm" 2>/dev/null | jq -r '.inserted // 0')
+    [ "${got:-0}" = "0" ] && echo "  sweep: $nm ($ex,$ey) at $lvl coal: insert failed"
+    sweep_in=$((sweep_in + got))
+  done
+fi
+total_coal_in=$((total_coal_in + sweep_in))
+echo "sweep (burner machines under 3 coal): +${sweep_in} coal"
 
 # off-belt modules: RELOC + adopted module A -- own output chest, swept by hand
 "$LIB/walk.sh" "$seat" -29 -42 3 >/dev/null 2>&1
