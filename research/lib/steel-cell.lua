@@ -23,9 +23,9 @@ for _, fx in pairs({106, 108, 110, 112, 114, 116}) do
   add(FURN, fx, 22.0, N); add('inserter', fx - 0.5, 20.5, N); add('inserter', fx - 0.5, 23.5, N)
 end
 add('medium-electric-pole', 106.5, 20.5); add('medium-electric-pole', 112.5, 20.5)
--- north pair: fed from the same row (inserters y=18.5), steel on belt y=14.5 west, side-loads the old pack column x=104.5 from the east (west lane, ends on the south lane of y=24.5)
+-- north pair: fed from the same row (inserters y=18.5). No output inserters: belt y=14.5 side-loads x=104.5 from the east, which becomes Ein1 lane 1 (the gear lane) at y=24.5 and blocked gears. The pair fills and stops.
 for _, fx in pairs({107, 109}) do
-  add(FURN, fx, 17.0, N); add('inserter', fx - 0.5, 18.5, S); add('inserter', fx - 0.5, 15.5, S)
+  add(FURN, fx, 17.0, N); add('inserter', fx - 0.5, 18.5, S)
 end
 belts(108.5, 105.5, 14.5, W); add('medium-electric-pole', 107.5, 15.5)
 -- RUNNER
