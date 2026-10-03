@@ -1,72 +1,50 @@
-local surface = player.surface
-local iron_line = {x=-24, y=-50}
-
-local function cluster(ents, radius)
-  -- greedy clustering: group entities within `radius` of each other's centroid
-  local clusters = {}
-  for _,e in pairs(ents) do
-    local placed = false
-    for _,c in pairs(clusters) do
-      local dx, dy = e.position.x - c.cx, e.position.y - c.cy
-      if (dx*dx+dy*dy)^0.5 <= radius then
-        table.insert(c.members, e)
-        c.cx = (c.cx*(#c.members-1) + e.position.x)/#c.members
-        c.cy = (c.cy*(#c.members-1) + e.position.y)/#c.members
-        c.minx = math.min(c.minx, e.position.x); c.maxx = math.max(c.maxx, e.position.x)
-        c.miny = math.min(c.miny, e.position.y); c.maxy = math.max(c.maxy, e.position.y)
-        placed = true
-        break
-      end
-    end
-    if not placed then
-      table.insert(clusters, {cx=e.position.x, cy=e.position.y, members={e},
-        minx=e.position.x, maxx=e.position.x, miny=e.position.y, maxy=e.position.y})
-    end
+-- survey.lua: machine counts by status, mined patch reserves, power, buffers, threats.
+local s=game.surfaces[1]
+local st={} for k,v in pairs(defines.entity_status) do st[v]=k end
+local out={}
+-- machines by name and status
+local agg={}
+for _,e in pairs(s.find_entities_filtered{force="player",type={"mining-drill","furnace","assembling-machine","lab","boiler","generator","offshore-pump","rocket-silo"}}) do
+  local k=e.name local a=agg[k] or {n=0} agg[k]=a a.n=a.n+1
+  local ss=st[e.status] or "nil" a[ss]=(a[ss] or 0)+1
+end
+for k,a in pairs(agg) do local t={} for ss,c in pairs(a) do if ss~="n" then t[#t+1]=ss.."="..c end end out[#out+1]=string.format("%-24s %4d  %s",k,a.n,table.concat(t," ")) end
+-- reserves under drills, by resource, grouped into 64-tile cells
+local res={}
+for _,d in pairs(s.find_entities_filtered{force="player",type="mining-drill"}) do
+  local m=d.mining_target
+  local cell=math.floor(d.position.x/64)..","..math.floor(d.position.y/64)
+  local r=d.prototype.mining_drill_radius or 1
+  if m then local key=m.name.."@"..cell
+  if not res[key] then
+    local amt=0 local c=d.position
+    for _,o in pairs(s.find_entities_filtered{type="resource",area={{c.x-40,c.y-40},{c.x+40,c.y+40}},name=m.name}) do amt=amt+o.amount end
+    res[key]={drills=0,amt=amt,x=c.x,y=c.y}
   end
-  return clusters
+  res[key].drills=res[key].drills+1 end
 end
-
--- coal patches
-local coal = surface.find_entities_filtered{type="resource", name="coal", position={0,0}, radius=400}
-local coal_clusters = cluster(coal, 15)
-rcon.print("=== COAL PATCHES ("..#coal_clusters.." clusters, "..#coal.." tiles) ===")
-for _,c in pairs(coal_clusters) do
-  if #c.members >= 5 then
-    local total = 0
-    for _,e in pairs(c.members) do total = total + e.amount end
-    local d_iron = ((c.cx-iron_line.x)^2+(c.cy-iron_line.y)^2)^0.5
-    local d_spawn = (c.cx^2+c.cy^2)^0.5
-    -- nearest enemy to this cluster
-    local enemies = surface.find_entities_filtered{position={c.cx,c.cy}, radius=60, force="enemy"}
-    local neard = 1e9
-    for _,en in pairs(enemies) do
-      local d = ((en.position.x-c.cx)^2+(en.position.y-c.cy)^2)^0.5
-      if d<neard then neard=d end
-    end
-    rcon.print(string.format("coal centre=(%.0f,%.0f) tiles=%d amount=%d bbox=(%.0f,%.0f)-(%.0f,%.0f) dist_spawn=%.0f dist_ironline=%.0f nearest_enemy=%s",
-      c.cx, c.cy, #c.members, total, c.minx, c.miny, c.maxx, c.maxy, d_spawn, d_iron, neard<1e8 and string.format("%.0f",neard) or "none_within_60"))
-  end
+out[#out+1]="-- mined patches (ore within 40 of first drill in each 64-cell)"
+for k,v in pairs(res) do out[#out+1]=string.format("%-28s drills %3d  ore %.2fM  near (%d,%d)",k,v.drills,v.amt/1e6,v.x,v.y) end
+-- power
+local p=game.forces.player
+for _,pole in pairs(s.find_entities_filtered{force="player",type="electric-pole",limit=1}) do
+  local es=pole.electric_network_statistics
+  local P=defines.flow_precision_index
+  local prod,cons=0,0
+  for n,_ in pairs(es.output_counts) do prod=prod+es.get_flow_count{name=n,category="output",precision_index=P.one_minute} end
+  for n,_ in pairs(es.input_counts) do cons=cons+es.get_flow_count{name=n,category="input",precision_index=P.one_minute} end
+  out[#out+1]=string.format("power (1-min avg, network of first pole): produced %.2f MW consumed %.2f MW",prod*60/1e6,cons*60/1e6)
 end
-
--- unit spawners (nests) within 400
-local spawners = surface.find_entities_filtered{type="unit-spawner", position={0,0}, radius=400}
-rcon.print("=== SPAWNERS/NESTS ("..#spawners..") ===")
-for _,s in pairs(spawners) do
-  rcon.print(string.format("%s at (%.0f,%.0f) dist_spawn=%.0f", s.name, s.position.x, s.position.y, (s.position.x^2+s.position.y^2)^0.5))
+-- buffers in containers
+local buf={}
+for _,c in pairs(s.find_entities_filtered{force="player",type="container"}) do
+  local inv=c.get_inventory(defines.inventory.chest)
+  for _,it in pairs(inv.get_contents()) do buf[it.name]=(buf[it.name] or 0)+it.count end
 end
-
--- good trees (wood:4 yield types), within 400
-local good_names = {["tree-09-red"]=true, ["dry-tree"]=true}
-local trees = surface.find_entities_filtered{type="tree", position={0,0}, radius=400}
-local good_trees = {}
-for _,t in pairs(trees) do if good_names[t.name] then table.insert(good_trees, t) end end
-local tree_clusters = cluster(good_trees, 20)
-rcon.print("=== GOOD TREE CLUSTERS ("..#tree_clusters.." clusters, "..#good_trees.." trees) ===")
-for _,c in pairs(tree_clusters) do
-  if #c.members >= 5 then
-    local d_spawn = (c.cx^2+c.cy^2)^0.5
-    local enemies = surface.find_entities_filtered{position={c.cx,c.cy}, radius=60, force="enemy"}
-    rcon.print(string.format("trees centre=(%.0f,%.0f) count=%d bbox=(%.0f,%.0f)-(%.0f,%.0f) dist_spawn=%.0f nearby_enemies=%d",
-      c.cx, c.cy, #c.members, c.minx, c.miny, c.maxx, c.maxy, d_spawn, #enemies))
-  end
-end
+local bl={} for n,c in pairs(buf) do if c>=200 then bl[#bl+1]=n.."="..c end end table.sort(bl)
+out[#out+1]="-- chest buffers >=200: "..table.concat(bl," ")
+-- threats
+local nests=s.count_entities_filtered{force="enemy",type="unit-spawner",position={0,0},radius=400}
+local worms=s.count_entities_filtered{force="enemy",type="turret",position={0,0},radius=400}
+out[#out+1]=string.format("enemy within 400: spawners %d worms %d; evolution %.3f; pollution at (0,0) %.0f",nests,worms,game.forces.enemy.get_evolution_factor(s),s.get_pollution{0,0})
+rcon.print(table.concat(out,"\n"))
