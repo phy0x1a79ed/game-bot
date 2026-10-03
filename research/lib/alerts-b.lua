@@ -18,6 +18,11 @@ for _, c in pairs(surf.find_entities_filtered{type = 'corpse', area = BASE}) do
   if c.name:find('remnants', 1, true) then add('DESTROYED ' .. c.name:gsub('%-remnants', '') .. '@' .. math.floor(c.position.x) .. ',' .. math.floor(c.position.y)) end
 end
 
+for _, c in pairs(surf.find_entities_filtered{type = 'character-corpse'}) do
+  local p = game.get_player(c.character_corpse_player_index)
+  add('SEATDEAD ' .. (p and p.name or '?') .. '@' .. math.floor(c.position.x) .. ',' .. math.floor(c.position.y) .. ' tick ' .. c.character_corpse_tick_of_death)
+end
+
 local cells = {}
 for _, u in pairs(surf.find_entities_filtered{force = 'enemy', type = 'unit', position = {0, -20}, radius = 250}) do
   if surf.count_entities_filtered{force = 'player', position = u.position, radius = 40, limit = 1} > 0 then

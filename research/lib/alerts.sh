@@ -6,7 +6,7 @@ dir=$(cd "$(dirname "$0")" && pwd)
 state=$(mktemp -d)
 touch "$state/prev" "$state/shown"
 while true; do
-  cur=$({ "$dir/act.sh" exec_lua "$seat" path="$dir/alerts.lua" budget_ms=30; "$dir/act.sh" exec_lua "$seat" path="$dir/alerts-b.lua"; } | jq -r '.output // empty' 2>/dev/null | sort -u)
+  cur=$({ "$dir/act.sh" exec_lua "$seat" path="$dir/alerts.lua" budget_ms=30; "$dir/act.sh" exec_lua "$seat" path="$dir/alerts-b.lua" budget_ms=30; } | jq -r '.output // empty' 2>/dev/null | sort -u)
   if [ -f "$dir/upkeep.log" ] && [ -n "$(find "$dir/upkeep.log" -mmin +15)" ]; then
     cur=$(printf '%s\nUPKEEP-STALE upkeep.log unchanged for 15+ min' "$cur" | sort -u)
   fi
