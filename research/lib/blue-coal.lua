@@ -1,0 +1,5 @@
+-- blue-coal.lua: coal in the block's steel furnaces and plastic plants, plastic/sulfur chest stock of modules 3/4.
+local s=game.surfaces[1]
+for _,p in ipairs({{43,32},{79,40},{99,40},{43,5}}) do local f=s.find_entities_filtered{name='steel-furnace',position=p,radius=0.6}[1] if f then rcon.print('furnace '..p[1]..','..p[2]..' fuel='..f.get_fuel_inventory().get_item_count('coal')) end end
+for _,p in ipairs({{70.5,42.5},{90.5,42.5},{34.5,34.5}}) do local f=s.find_entities_filtered{name='chemical-plant',position=p,radius=0.6}[1] if f then rcon.print('plastic '..p[1]..','..p[2]..' coal='..f.get_inventory(defines.inventory.crafter_input or 2).get_item_count('coal')..' out='..f.get_inventory(defines.inventory.crafter_output or 3).get_item_count('plastic-bar')) end end
+for _,p in ipairs({{69.5,39.5},{89.5,39.5},{74.5,39.5},{94.5,39.5}}) do local c=s.find_entities_filtered{name='iron-chest',position=p,radius=0.5}[1] local t={} for _,it in pairs(c.get_inventory(defines.inventory.chest).get_contents()) do t[#t+1]=it.name..'='..it.count end rcon.print('chest '..p[1]..','..p[2]..' '..table.concat(t,' ')) end

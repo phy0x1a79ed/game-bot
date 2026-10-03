@@ -32,8 +32,10 @@ for f in "${FURNACES[@]}"; do
   set -- $f
   need=$(( TARGET - ${lv[$i]:-0} ))
   if [ "${lv[$i]:--1}" -ge 0 ] && [ "$need" -gt 0 ]; then
-    got=$("$LIB/act.sh" insert "$seat" x="$1" y="$2" name=coal count="$need" target="${names[$i]}" 2>/dev/null | jq -r '.inserted // 0')
-    total=$((total + got))
+    res=$("$LIB/act.sh" insert "$seat" x="$1" y="$2" name=coal count="$need" target="${names[$i]}" 2>&1)
+    got=$(jq -r '.inserted // 0' <<< "$res" 2>/dev/null)
+    [ "${got:-0}" = "0" ] && echo "  copper furnace ($1,$2) at ${lv[$i]} coal: insert failed: $(tr -d '\n' <<< "$res" | head -c 300)"
+    total=$((total + ${got:-0}))
   fi
   i=$((i + 1))
 done
