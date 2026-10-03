@@ -125,6 +125,17 @@ while true; do
     fi
   fi
 
+  echo "-- coal check (pre blue steel furnace) --"
+  coal_topup
+
+  echo "-- blue block steel furnace (43,5) --"
+  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("steel-furnace",{43,5}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
+    "$LIB/walk.sh" "$seat" 43 2.5 3 >/dev/null
+    ins=$("$LIB/act.sh" insert "$seat" x=43 y=5 name=coal count=$((50 - lvl)) target=steel-furnace 2>/dev/null | jq -r '.inserted // 0')
+    echo "  steel furnace(43,5): was ${lvl}, +${ins} coal"
+  fi
+
   echo "-- patrol + turret top-up --"
   "$LIB/patrol.sh" "$seat"
   LUA_LOW='
