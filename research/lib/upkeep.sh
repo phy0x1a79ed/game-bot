@@ -149,7 +149,8 @@ while true; do
 local out = {}
 for _, e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="player", name="gun-turret"}) do
   local ammo = e.get_inventory(defines.inventory.turret_ammo).get_item_count()
-  if ammo < 20 then out[#out+1] = string.format("%.0f,%.0f", e.position.x, e.position.y) end
+  local mine = not (e.last_user and e.last_user.name == "Phyberosis") and e.position.x^2 + e.position.y^2 < 230^2
+  if mine and ammo < 20 then out[#out+1] = string.format("%.0f,%.0f", e.position.x, e.position.y) end
 end
 rcon.print(table.concat(out, ";"))
 '
