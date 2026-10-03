@@ -15,9 +15,9 @@ TAP_STOPS=(
 )
 RING_STOPS=(
 )
-# ring 1 drill (68,-42) is depleted, so its output chest stays empty and drill (72,-42)
-# only gets fuel by hand: "walk_x walk_y drill_x drill_y target_coal"
-RING_HAND_DRILLS=( "69 -44 72 -42 40" )
+# Coal ring 1 is retired (its drills are marked for deconstruction), so no drill is hand-fuelled:
+# "walk_x walk_y drill_x drill_y target_coal"
+RING_HAND_DRILLS=()
 
 have() { "$LIB/act.sh" observe "$seat" radius=1 | jq -r '.snapshot.inventory["coal"] // 0'; }
 exec_out() { RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$1" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]'; }
