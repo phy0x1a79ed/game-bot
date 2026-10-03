@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # upkeep.sh SEAT [INTERVAL_S]
 # The unified maintenance loop for the defense/upkeep lane (2026-09-26 role
-# change): one pass covers coal hauling, the iron column, copper, power
+# change): one pass covers coal hauling, the iron column burner rescue, power
 # (boiler rescue + magazine pickup) and turret ammo top-ups -- then sleeps INTERVAL_S (default 600 =
 # ~10 game minutes at 1x) and repeats. Logs to upkeep.log beside this script.
 # Stop with `kill <pid>` (pid is echoed on start, or `pgrep -f upkeep.sh`).
@@ -9,10 +9,7 @@
 # Coordinates owned (see BOARD.md for full history):
 #   coal ring 1: 4 chests around (67-73,-37 to -44)
 #   iron column: see service-iron-column.sh header
-#   copper modules 2-6: see service-copper.sh header
 #   ammo assembler output (-34.5,-4.5): magazines for turret top-ups
-#   red-asm copper chests (-42.5,-8.5)/(-34.5,-8.5) -- serviced inside
-#     service-copper.sh's delivery step
 set -u
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
@@ -48,12 +45,6 @@ while true; do
 
   echo "-- iron column burner rescue --"
   "$LIB/service-iron-column.sh" "$seat"
-
-  echo "-- coal check (pre copper) --"
-  coal_topup
-
-  echo "-- copper --"
-  "$LIB/service-copper.sh" "$seat"
 
   echo "-- depot: iron above 1500 on hand --"
   have_iron=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["iron-plate"] // 0')
