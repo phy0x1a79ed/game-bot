@@ -12,7 +12,7 @@ local function ug(x, y, dir, t) add('underground-belt', x, y, dir, {type = t}) e
 local function am(x, y, recipe) add('assembling-machine-2', x, y, N, {recipe = recipe}) end
 local function poles(list) for _, p in pairs(list) do add('medium-electric-pole', p[1], p[2]) end end
 local AREA = {{158, -30}, {280, 16}}
-belts(253.5, 226.5, -10.5, W) ug(225.5, -10.5, W, 'input') ug(223.5, -10.5, W, 'output') belts(222.5, 217.5, -10.5, W)
+belts(254.5, 226.5, -10.5, W) ug(225.5, -10.5, W, 'input') ug(223.5, -10.5, W, 'output') belts(222.5, 217.5, -10.5, W)
 add('transport-belt', 216.5, -10.5, N) beltsy(216.5, -11.5, -14.5, N) ug(216.5, -15.5, N, 'input') ug(216.5, -17.5, N, 'output')
 add('transport-belt', 216.5, -18.5, W) belts(215.5, 161.5, -18.5, W) add('transport-belt', 160.5, -18.5, S) beltsy(160.5, -17.5, -4.5, S)
 add('splitter', 161.0, -3.5, S) beltsy(160.5, -2.5, -1.5, S) belts(160.5, 111.5, -0.5, W)
