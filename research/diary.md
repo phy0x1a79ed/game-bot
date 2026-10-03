@@ -136,7 +136,7 @@ parallel took 2.7 seconds against 6.6 in series.
 Unpaused the run 3 end save at tick 1225470. Space Age 2.1.20 is active, so the
 game is won at the solar system edge; this run aims at the first rocket. Plan:
 `~/.claude/plans/factorio-run4.md`. Saves: `run4-oil-processing`,
-`run4-oil-park`.
+`run4-oil-park`, `run4-first-blue`.
 
 **Seats**
 
@@ -194,6 +194,15 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   of science or on their own supply, and bar their chests to 1 slot.
 - Furnace result slots read 0 on the column: their output inserters empty
   them at once. Take plates from a belt or the depot.
+- Iron bank 1 (tick 1416k, +186/min, total about 600/min): 6 electric drills
+  at (-29.5,-63.5..-46.5) drop ore on belt O x=-27.5. A coal feeder side-loads
+  O's other lane, so 5 steel furnaces at (-30,-38..-30) fuel themselves from
+  the same belt. Plates run on belt P. A splitter (-22.5,-30) with left
+  priority fills the trunk first and sends the rest east to (38.5,-20.5).
+- The home patch is nearly tapped out (350k, the rich core is drilled). The
+  next iron is the NW patch (-144..-129,-160..-129), 640k, 104 tiles from the
+  nearest spawner, or mining productivity.
+- All 8 copper furnaces are steel furnaces now (+90/min once demand draws it).
 
 **Defense**
 
@@ -205,6 +214,15 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
 - Spawners within 330 tiles rose from 19 to 23 by tick 1340k: nests expand.
 - Hand-crafted magazines fill the pistol ammo slot first (100); `insert`
   reads only the main inventory.
+- Waves reach 120-130 small biters by evolution 0.14. Four turrets with no wall
+  at the oil water pump died to one. Six turrets behind a wall 3-4 tiles out
+  then held a 120-biter wave with no loss and 6 magazines spent each. Defend
+  an exposed site with 6 turrets and a wall.
+- Damage tech past level 2 needs military science. Piercing magazines are
+  unlocked with military-2: 2 yellow + 1 steel + 2 copper make 2. Hand-crafted
+  piercing lands in the main inventory, so `insert` works. A turret holds one
+  ammo kind: take its yellow out before inserting piercing.
+- An inserter's build direction names its pickup side.
 
 **Science**
 
@@ -212,6 +230,13 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   (-25.5,0.5)/(-25.5,4.5) on its own belt x=-22.5. The lab belt's east end is
   a side-load: everything on the pack belt lands on one lane, so red feeds
   through the stub on the other lane.
+- First blue packs reached the labs at tick 1455k: pack AM2 (38.5,8.5),
+  engine AM2 (42.5,8.5), belt north on x=41.5 and west on y=-24.5 to lab
+  (-44.5,-21.5). Labs research only the current tech, so a blue tech with one
+  pack assembler (3.75/min) idles 6 of 8 labs. Run red+green techs while blue
+  buffers on the belt, and put blue techs first once blue passes 10/min.
+- A fast tech (10 s per unit) empties green: 8 labs want about 48 green/min
+  against 22 made. Long techs (30-60 s) do not.
 
 ### 2026-10-02 — run 3: the same crew, from the run 2 end save
 
