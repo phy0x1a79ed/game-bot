@@ -7,12 +7,13 @@ LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
 [ -z "$seat" ] && { echo "usage: service-power.sh SEAT"; exit 1; }
 
-# A boiler that is out of fuel (status no_fuel, or 0 coal) gets topped to 30.
+# A boiler that is out of fuel (status no_fuel, or an empty fuel slot) gets 30 coal.
+# The west boilers burn solid fuel off the main belt, so the test counts any fuel.
 # Belt-fed boilers idle at ~5 coal, so a higher threshold hand-fed all of them every
 # cycle and hid whether the belts keep up. Out-of-fuel still needs a rescue: a
 # brownout slows the electric coal drills that feed the boilers, a spiral nothing
 # else breaks.
-LUA_BOILERS='local o={} for _,b in pairs(game.surfaces[1].find_entities_filtered{type="boiler",force="player"}) do local c=b.get_fuel_inventory().get_item_count("coal") if c<1 or b.status==defines.entity_status.no_fuel then local s=game.surfaces[1].find_non_colliding_position("character",b.position,4,0.5) if s and s.x>-48 and s.x<-38 and s.y>-32.5 and s.y<-29.5 then s=game.surfaces[1].find_non_colliding_position("character",{b.position.x,b.position.y-4},2,0.5) end if s then o[#o+1]=string.format("%.1f,%.1f,%d,%.1f,%.1f",b.position.x,b.position.y,c,s.x,s.y) end end end rcon.print(table.concat(o,";"))'
+LUA_BOILERS='local o={} for _,b in pairs(game.surfaces[1].find_entities_filtered{type="boiler",force="player"}) do local fi=b.get_fuel_inventory() local c=fi.get_item_count() if fi.is_empty() or b.status==defines.entity_status.no_fuel then local s=game.surfaces[1].find_non_colliding_position("character",b.position,4,0.5) if s and s.x>-48 and s.x<-38 and s.y>-32.5 and s.y<-29.5 then s=game.surfaces[1].find_non_colliding_position("character",{b.position.x,b.position.y-4},2,0.5) end if s then o[#o+1]=string.format("%.1f,%.1f,%d,%.1f,%.1f",b.position.x,b.position.y,c,s.x,s.y) end end end rcon.print(table.concat(o,";"))'
 dry=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_BOILERS" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
 boiler_in=0
 if [ -n "$dry" ]; then
