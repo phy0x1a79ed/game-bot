@@ -128,16 +128,20 @@ while true; do
     fi
   fi
 
-  echo "-- coal check (pre blue steel furnace) --"
+  echo "-- coal check (pre blue steel furnaces) --"
   coal_topup
 
-  echo "-- blue block steel furnace (43,5) --"
-  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("steel-furnace",{43,5}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
-    "$LIB/walk.sh" "$seat" 43 2.5 3 >/dev/null
-    ins=$("$LIB/act.sh" insert "$seat" x=43 y=5 name=coal count=$((50 - lvl)) target=steel-furnace 2>/dev/null | jq -r '.inserted // 0')
-    echo "  steel furnace(43,5): was ${lvl}, +${ins} coal"
-  fi
+  echo "-- blue modules' steel furnaces --"
+  # Modules 2-4 take coal off P's shared lane, which bank 2's plates now crowd.
+  for bf in "43 5" "43 32" "79 40" "99 40"; do
+    set -- $bf; fx=$1; fy=$2
+    read -r lvl sx sy <<< "$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local f=game.surfaces[1].find_entity('steel-furnace',{$fx,$fy}) if not f then rcon.print('-1 0 0') return end local q=game.surfaces[1].find_non_colliding_position('character',f.position,4,0.5) or f.position rcon.print(string.format('%d %.1f %.1f',f.get_fuel_inventory().get_item_count('coal'),q.x,q.y))" 2>/dev/null | jq -r '.output // "-1 0 0"')"
+    if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
+      "$LIB/walk.sh" "$seat" "$sx" "$sy" 2 >/dev/null
+      ins=$("$LIB/act.sh" insert "$seat" x="$fx" y="$fy" name=coal count=$((50 - lvl)) target=steel-furnace 2>/dev/null | jq -r '.inserted // 0')
+      echo "  steel furnace($fx,$fy): was ${lvl}, +${ins} coal"
+    fi
+  done
 
   echo "-- patrol + turret top-up --"
   "$LIB/patrol.sh" "$seat"
