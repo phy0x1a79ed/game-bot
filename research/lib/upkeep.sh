@@ -2,7 +2,7 @@
 # upkeep.sh SEAT [INTERVAL_S]
 # The unified maintenance loop for the defense/upkeep lane (2026-09-26 role
 # change): one pass covers coal hauling, the iron column, copper, power
-# (boiler + ammo assembler), the green-science-line input chests, the stone
+# (boiler rescue + magazine pickup), the stone
 # drill, and turret ammo top-ups -- then sleeps INTERVAL_S (default 600 =
 # ~10 game minutes at 1x) and repeats. Logs to upkeep.log beside this script.
 # Stop with `kill <pid>` (pid is echoed on start, or `pgrep -f upkeep.sh`).
@@ -11,9 +11,7 @@
 #   coal ring 1: 4 chests around (67-73,-37 to -44)
 #   iron column: see service-iron-column.sh header
 #   copper modules 2-6: see service-copper.sh header
-#   boiler feed (-47.5,-8.5), ammo assembler in/out (-40.5,-4.5)/(-34.5,-4.5)
-#   green-line chests: copper(-46.5,-2.5), iron(-42.5,-2.5)/(-38.5,-2.5)/
-#     (-34.5,-2.5)/(-30.5,-2.5)
+#   ammo assembler output (-34.5,-4.5): magazines for turret top-ups
 #   brick line: electric drill (59.5,-28.5) -> stone furnace (59,-31) -> chest (59.5,-33.5)
 #   red-asm copper chests (-42.5,-8.5)/(-34.5,-8.5) -- serviced inside
 #     service-copper.sh's delivery step
@@ -29,14 +27,6 @@ RING_STOPS=(
   "73 -40.5 72.5 -40.5 60"
   "71 -36.5 70.5 -37.5 60"
   "66 -39 67.5 -39.5 60"
-)
-
-GREEN_CHESTS=(
-  "-46.5 -2.5 copper-plate 200"
-  "-42.5 -2.5 iron-plate 300"
-  "-38.5 -2.5 iron-plate 300"
-  "-34.5 -2.5 iron-plate 300"
-  "-30.5 -2.5 iron-plate 300"
 )
 
 echo "upkeep.sh started for $seat, interval=${interval}s, pid=$$"
@@ -75,40 +65,11 @@ while true; do
     echo "  depot iron +${got}"
   fi
 
-  echo "-- iron for ammo assembler + green chests (from gear chest surplus) --"
-  "$LIB/iron-from-gear.sh" "$seat" 1400
-
   echo "-- coal check (pre power) --"
   coal_topup
 
-  echo "-- power (boiler + ammo assembler) --"
+  echo "-- power (boiler rescue + magazine pickup) --"
   "$LIB/service-power.sh" "$seat"
-
-  echo "-- green-line chests --"
-  LUA_ENEMY='local n=0 for _,e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="enemy",type="unit",position={-38,-2},radius=60}) do n=n+1 end rcon.print(n)'
-  enemies=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_ENEMY" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-  if [ "${enemies:-0}" = "0" ]; then
-    for g in "${GREEN_CHESTS[@]}"; do
-      set -- $g; gx=$1; gy=$2; item=$3; cap=$4
-      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local c=game.surfaces[\"nauvis\"].find_entity(\"iron-chest\",{$gx,$gy}) rcon.print(c and c.get_inventory(defines.inventory.chest).get_item_count(\"$item\") or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-      if [ "${lvl:-0}" -ge 0 ] 2>/dev/null; then
-        need=$((cap - lvl))
-        if [ "$need" -gt 0 ]; then
-          have=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r ".snapshot.inventory[\"$item\"] // 0")
-          take=$need; [ "$have" -lt "$take" ] && take=$have
-          if [ "$take" -gt 0 ]; then
-            "$LIB/walk.sh" "$seat" "$gx" "$gy" 3 >/dev/null
-            got=$("$LIB/act.sh" insert "$seat" x="$gx" y="$gy" name="$item" count="$take" target=iron-chest 2>/dev/null | jq -r '.inserted // 0')
-            echo "  green chest($gx,$gy) $item: was ${lvl}, +${got}"
-          else
-            echo "  green chest($gx,$gy) $item: was ${lvl}, need ${need} but 0 on hand"
-          fi
-        fi
-      fi
-    done
-  else
-    echo "  enemies near green line, skipping"
-  fi
 
   echo "-- coal check (pre stone-drill) --"
   coal_topup
