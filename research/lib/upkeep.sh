@@ -122,6 +122,11 @@ while true; do
       "$LIB/walk.sh" "$seat" 61 -30 3 >/dev/null
       ins=$("$LIB/act.sh" insert "$seat" x=60 y=-30 name=coal count=30 target=burner-mining-drill 2>/dev/null | jq -r '.inserted // 0')
       echo "  stone drill(60,-30): +${ins} coal"
+      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("stone-furnace",{59,-34}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+      if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
+        ins=$("$LIB/act.sh" insert "$seat" x=59 y=-34 name=coal count=$((50 - lvl)) target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
+        echo "  brick furnace(59,-34): was ${lvl}, +${ins} coal"
+      fi
     fi
   fi
 
