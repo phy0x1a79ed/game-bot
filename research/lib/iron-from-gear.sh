@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # iron-from-gear.sh SEAT WANT [FLOOR]
 # Tops the seat's iron-plate up to WANT from the gear assembler's input chest
-# (-38.5,-8.5), never taking that chest below FLOOR (default 1500). The iron
+# (-38.5,-8.5), never taking that chest below FLOOR (default 700). The iron
 # belt backs up into that chest, so its surplus is free iron for the ammo
 # assembler and the green-line chests.
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-seat=$1; want=$2; floor=${3:-1500}
+seat=$1; want=$2; floor=${3:-700}
 have=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["iron-plate"] // 0')
 need=$((want - have))
 [ "$need" -le 0 ] && { echo "iron on hand $have >= $want"; exit 0; }

@@ -107,12 +107,17 @@ for y in "${EAST_YS[@]}"; do
   echo "east y=$y: drill+${di} furnace+${fi} out-inserter+${oi} coal (belt-fed, no collection)"
 done
 
-# west column (2026-10-02, iron lane): 6 stone furnaces (-34,y); electric drills and
-# inserters, so only the furnaces burn coal. One stop reaches all six.
+# west column: 6 steel furnaces (-34,y); electric drills and inserters, so only
+# the furnaces burn coal. Iron bank 1's drills at x=-29.5 push a single stop out
+# of reach of the south four, so stand at (-32,-58) for y<=-57 and (-32,-52) below.
 WEST_YS=(-63 -60 -57 -54 -51 -48)
-"$LIB/walk.sh" "$seat" -30.5 -55.5 3 >/dev/null 2>&1
 west_in=0
 for y in "${WEST_YS[@]}"; do
+  if [ "$y" -le -57 ]; then stop=-58; else stop=-52; fi
+  if [ "$stop" != "${west_stop:-}" ]; then
+    "$LIB/walk.sh" "$seat" -32 "$stop" 1 >/dev/null 2>&1
+    west_stop=$stop
+  fi
   lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={-34,$y},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
   need=$((50 - lvl))
   if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
@@ -136,6 +141,22 @@ for x in -4 -1; do
 done
 total_coal_in=$((total_coal_in + steel_in))
 echo "steel furnaces (-4,17),(-1,17): +${steel_in} coal"
+
+# east strip module: electric drills (-12.5,-55.5/-52.5/-49.5) feed stone furnaces
+# (-10,-55/-52/-49) and (-15,-48); only the furnaces burn coal.
+"$LIB/walk.sh" "$seat" -8 -52 1 >/dev/null 2>&1
+strip_in=0
+for xy in "-10 -55" "-10 -52" "-10 -49" "-15 -48"; do
+  set -- $xy
+  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={$1,$2},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
+  need=$((50 - lvl))
+  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
+    fi=$("$LIB/act.sh" insert "$seat" x=$1 y=$2 name=coal count="$need" target=stone-furnace | jq -r '.inserted // 0')
+    strip_in=$((strip_in + fi))
+  fi
+done
+total_coal_in=$((total_coal_in + strip_in))
+echo "east strip furnaces (-10,y),(-15,-48): +${strip_in} coal"
 
 # off-belt modules: RELOC + adopted module A -- own output chest, swept by hand
 "$LIB/walk.sh" "$seat" -29 -42 3 >/dev/null 2>&1
