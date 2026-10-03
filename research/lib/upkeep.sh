@@ -2,8 +2,7 @@
 # upkeep.sh SEAT [INTERVAL_S]
 # The unified maintenance loop for the defense/upkeep lane (2026-09-26 role
 # change): one pass covers coal hauling, the iron column, copper, power
-# (boiler rescue + magazine pickup), the stone
-# drill, and turret ammo top-ups -- then sleeps INTERVAL_S (default 600 =
+# (boiler rescue + magazine pickup) and turret ammo top-ups -- then sleeps INTERVAL_S (default 600 =
 # ~10 game minutes at 1x) and repeats. Logs to upkeep.log beside this script.
 # Stop with `kill <pid>` (pid is echoed on start, or `pgrep -f upkeep.sh`).
 #
@@ -12,7 +11,6 @@
 #   iron column: see service-iron-column.sh header
 #   copper modules 2-6: see service-copper.sh header
 #   ammo assembler output (-34.5,-4.5): magazines for turret top-ups
-#   brick line: electric drill (59.5,-28.5) -> stone furnace (59,-31) -> chest (59.5,-33.5)
 #   red-asm copper chests (-42.5,-8.5)/(-34.5,-8.5) -- serviced inside
 #     service-copper.sh's delivery step
 set -u
@@ -48,7 +46,7 @@ while true; do
   echo "-- coal check (pre iron-column) --"
   coal_topup
 
-  echo "-- steel line furnaces + burner rescue --"
+  echo "-- iron column burner rescue --"
   "$LIB/service-iron-column.sh" "$seat"
 
   echo "-- coal check (pre copper) --"
@@ -70,24 +68,6 @@ while true; do
 
   echo "-- power (boiler rescue + magazine pickup) --"
   "$LIB/service-power.sh" "$seat"
-
-  echo "-- coal check (pre stone-drill) --"
-  coal_topup
-
-  echo "-- stone drill --"
-  LUA_ENEMY2='local n=0 for _,e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="enemy",type="unit",position={60,-30},radius=60}) do n=n+1 end rcon.print(n)'
-  enemies=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$LUA_ENEMY2" 2>/dev/null | jq -r '.output // "0"' | tr -d '[:space:]')
-  if [ "${enemies:-0}" = "0" ]; then
-    have_coal=$("$LIB/act.sh" observe "$seat" radius=1 2>/dev/null | jq -r '.snapshot.inventory["coal"] // 0')
-    if [ "${have_coal:-0}" -ge 20 ] 2>/dev/null; then
-      "$LIB/walk.sh" "$seat" 61 -30 3 >/dev/null
-      lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code 'local f=game.surfaces["nauvis"].find_entity("stone-furnace",{59,-31}) rcon.print(f and f.get_fuel_inventory().get_item_count("coal") or -1)' 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-      if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$lvl" -lt 30 ]; then
-        ins=$("$LIB/act.sh" insert "$seat" x=59 y=-31 name=coal count=$((50 - lvl)) target=stone-furnace 2>/dev/null | jq -r '.inserted // 0')
-        echo "  brick furnace(59,-31): was ${lvl}, +${ins} coal"
-      fi
-    fi
-  fi
 
   echo "-- patrol + turret top-up --"
   "$LIB/patrol.sh" "$seat"
