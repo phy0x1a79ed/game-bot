@@ -1,62 +1,13 @@
 #!/usr/bin/env bash
-# service-iron-column.sh SEAT [COAL_PER_BURNER] [SELF_CHEST_COAL] [--no-deposit]
-# One sweep of the whole iron column + a depot drop. Safe to call repeatedly;
-# insert/take just clip to whatever's available/needed. Needs coal on hand --
-# run a coal-ring run first (see coal-run.sh), or call loop-service.sh which
-# does that automatically.
-#
-# Topology as of 2026-09-26 (see diary "Machine inventories decide where an
-# inserter pays" + the furnace-feed redesign + the belt hand-off):
-#
-# BELT_YS (drill x=-24, furnace x=-22, y in BELT_YS): output inserter
-# (-20.5,y,dir=west) drops plates onto science's transport-belt trunk at
-# x=-19.5 (runs y=-62.5..-7.5), which carries them straight to the gear
-# assembler's input chest (-38.5,-8.5). NO plate collection happens here any
-# more for these rows -- there's no chest, just fuel maintenance. y=-45/-48
-# are hand-fed (drill+furnace fuelled directly); y=-51/-54/-57/-60/-63 have a
-# self-fuelling drill (coal chest ~(-27,y) -> inserter ~(-26,y,west) -> drill)
-# plus a hand-fed furnace. Every row's OUTPUT inserter burns fuel too (2026-
-# 09-26: all 5 ran dry once already) -- keep it topped or the belt starves.
-#
-# EAST_YS (drill x=-15 facing WEST, furnace x=-17, y in EAST_YS): new modules
-# on a separate rich ore lobe found east of the belt (2026-09-26 survey).
-# Output inserter (-18.5,y,dir=east) picks up from the furnace on its east
-# side and drops onto the SAME belt trunk at x=-19.5 from the other side.
-# Hand-fed (drill+furnace), no self-fuel chest.
-#
-# OFFCOL modules (drill/furnace pairs not adjacent to the belt): each gets its
-# own output inserter+chest instead of a belt tap. This script hand-feeds
-# fuel and SWEEPS these chests into inventory for the depot drop -- they are
-# now the main source of iron the depot sees from this column, since every
-# belt-tapped row bypasses the depot entirely.
-#   - RELOC ex-(-24,-42), moved to rich ore: drill(-32,-44)/furnace(-30,-44),
-#     output inserter(-28.5,-44,west)+chest(-27.5,-44).
-#   - Module A (pre-existing, adopted 2026-09-26): drill(-34,-42)/
-#     furnace(-32,-42), output inserter(-30.5,-42,west)+chest(-29.5,-42).
-#
-# Then tops the gear assembler's input chest (-38.5,-8.5) to GEAR_TARGET
-# (belt should mostly cover this now; kept as a backstop), then deposits
-# everything collected above a small on-hand buffer to the depot chest
-# (0.5,-19.5).
-#
-# Checks for enemies within 150 of the column before moving (diary rule:
-# read enemy positions before every move); aborts the sweep if any are found.
-set -u
+# service-iron-column.sh SEAT [ignored...]
+# The home iron column is belt-fuelled now (bank B5, 2026-10-02), so this only
+# hand-coals the steel line's two stone furnaces (-4,17) (-1,17) and rescues any
+# burner furnace or drill in the home iron area, bank 2 and the steel line that
+# has under 3 fuel. Belt-fed furnaces idle at about 5, so the rescue stays idle
+# while their belts keep up.
 LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 seat=$1
-coal=${2:-40}
-self_coal=${3:-60}
-deposit=1
-[ "${4:-}" = "--no-deposit" ] && deposit=0
-[ "${3:-}" = "--no-deposit" ] && { deposit=0; self_coal=60; }
-[ -z "$seat" ] && { echo "usage: service-iron-column.sh SEAT [coal_per_burner] [self_chest_coal] [--no-deposit]"; exit 1; }
-
-HAND_YS=(-45 -48)
-SELF_YS=(-51 -54 -57 -60 -63)
-EAST_YS=(-51 -57)
-DEPOT_X=0.5
-DEPOT_Y=-19.5
-BUFFER=20
+[ -z "$seat" ] && { echo "usage: service-iron-column.sh SEAT"; exit 1; }
 
 echo "== enemy check =="
 LUA_ENEMY_CHECK='local n=0 for _,e in pairs(game.surfaces["nauvis"].find_entities_filtered{force="enemy",type="unit",position={-23,-53},radius=150}) do n=n+1 end rcon.print(n)'
@@ -68,67 +19,6 @@ if [ "${enemies:-0}" != "0" ]; then
 fi
 
 total_coal_in=0
-total_plates=0
-
-furnace_name() {
-  RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={$1,$2},radius=0.5}[1] rcon.print(e and e.name or 'stone-furnace')" 2>/dev/null | jq -r '.output // "stone-furnace"' | tr -d '[:space:]'
-}
-
-
-# 2026-09-26 14:xx: iron electrified the whole -24,y drill line (HAND_YS +
-# SELF_YS, y=-45..-63) -- electric-mining-drill needs no coal, and the
-# self-fed rows' coal chest + fuel inserter were physically removed. Only the
-# furnace and the output inserter still burn coal on these rows now.
-for y in "${HAND_YS[@]}"; do
-  wy=$((y + 2))
-  "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target="$(furnace_name -22 "$y")" | jq -r '.inserted // 0')
-  oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-  total_coal_in=$((total_coal_in + fi + oi))
-  echo "hand-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, belt-fed, no collection)"
-done
-
-for y in "${SELF_YS[@]}"; do
-  wy=$((y + 2))
-  "$LIB/walk.sh" "$seat" -23 "$wy" 3 >/dev/null 2>&1
-  fi=$("$LIB/act.sh" insert "$seat" x=-22 y=$y name=coal count="$coal" target="$(furnace_name -22 "$y")" | jq -r '.inserted // 0')
-  oi=$("$LIB/act.sh" insert "$seat" x=-20.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-  total_coal_in=$((total_coal_in + fi + oi))
-  echo "self-fed y=$y: furnace+${fi} out-inserter+${oi} coal (drill is electric, chest/fuel-inserter removed, belt-fed, no collection)"
-done
-
-for y in "${EAST_YS[@]}"; do
-  wy=$((y - 2))
-  "$LIB/walk.sh" "$seat" -15 "$wy" 3 >/dev/null 2>&1
-  di=$("$LIB/act.sh" insert "$seat" x=-15 y=$y name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
-  fi=$("$LIB/act.sh" insert "$seat" x=-17 y=$y name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
-  oi=$("$LIB/act.sh" insert "$seat" x=-18.5 y=$y name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-  total_coal_in=$((total_coal_in + di + fi + oi))
-  echo "east y=$y: drill+${di} furnace+${fi} out-inserter+${oi} coal (belt-fed, no collection)"
-done
-
-# west column: 6 steel furnaces (-34,y); electric drills and inserters, so only
-# the furnaces burn coal. Iron bank 1's drills at x=-29.5 push a single stop out
-# of reach of the south four, so stand at (-32,-58) for y<=-57 and (-32,-52) below.
-WEST_YS=(-63 -60 -57 -54 -51 -48)
-west_in=0
-for y in "${WEST_YS[@]}"; do
-  if [ "$y" -le -57 ]; then stop=-58; else stop=-52; fi
-  if [ "$stop" != "${west_stop:-}" ]; then
-    "$LIB/walk.sh" "$seat" -32 "$stop" 1 >/dev/null 2>&1
-    west_stop=$stop
-  fi
-  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={-34,$y},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-  need=$((50 - lvl))
-  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
-    res=$("$LIB/act.sh" insert "$seat" x=-34 y=$y name=coal count="$need" target="$(furnace_name -34 "$y")")
-    fi=$(jq -r '.inserted // 0' <<< "$res")
-    [ "${fi:-0}" = "0" ] && echo "  west furnace (-34,$y) at $lvl coal: insert failed: $(head -c 200 <<< "$res")"
-    west_in=$((west_in + fi))
-  fi
-done
-total_coal_in=$((total_coal_in + west_in))
-echo "west column furnaces (-34,y): +${west_in} coal"
 
 # steel line (2026-10-02, iron lane): 2 stone furnaces south of feed row F.
 "$LIB/walk.sh" "$seat" -2.5 21.5 3 >/dev/null 2>&1
@@ -144,26 +34,7 @@ done
 total_coal_in=$((total_coal_in + steel_in))
 echo "steel furnaces (-4,17),(-1,17): +${steel_in} coal"
 
-# east strip module: electric drills (-12.5,-55.5/-52.5/-49.5) feed stone furnaces
-# (-10,-55/-52/-49) and (-15,-48); only the furnaces burn coal.
-"$LIB/walk.sh" "$seat" -8 -52 1 >/dev/null 2>&1
-strip_in=0
-for xy in "-10 -55" "-10 -52" "-10 -49" "-15 -48"; do
-  set -- $xy
-  lvl=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local e=game.surfaces[1].find_entities_filtered{type='furnace',position={$1,$2},radius=0.5}[1] rcon.print(e and e.get_fuel_inventory().get_item_count('coal') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-  need=$((50 - lvl))
-  if [ "${lvl:--1}" -ge 0 ] 2>/dev/null && [ "$need" -gt 0 ]; then
-    fi=$("$LIB/act.sh" insert "$seat" x=$1 y=$2 name=coal count="$need" target=stone-furnace | jq -r '.inserted // 0')
-    strip_in=$((strip_in + fi))
-  fi
-done
-total_coal_in=$((total_coal_in + strip_in))
-echo "east strip furnaces (-10,y),(-15,-48): +${strip_in} coal"
-
-# sweep: any burner furnace or burner drill in the home iron area, bank 2 and the steel line still under 3
-# coal after the named stops above (catches modules nobody listed here). Belt-fed
-# furnaces idle at about 5 coal, so a higher threshold would hand-feed them too.
-low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local o={} for _,e in pairs(game.surfaces[1].find_entities_filtered{area={{-50,-70},{45,-25}},type={'furnace','mining-drill'}}) do local fi=e.get_fuel_inventory() if fi then local c=fi.get_item_count('coal') if c<3 then local q=game.surfaces[1].find_non_colliding_position('character',e.position,4,0.5) if q then o[#o+1]=string.format('%s,%.1f,%.1f,%d,%.1f,%.1f',e.name,e.position.x,e.position.y,c,q.x,q.y) end end end end rcon.print(table.concat(o,';'))" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
+low=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local o={} for _,e in pairs(game.surfaces[1].find_entities_filtered{area={{-50,-70},{45,-25}},type={'furnace','mining-drill'}}) do local fi=e.get_fuel_inventory() if fi then local c=fi.get_item_count() if c<3 then local q=game.surfaces[1].find_non_colliding_position('character',e.position,4,0.5) if q then o[#o+1]=string.format('%s,%.1f,%.1f,%d,%.1f,%.1f',e.name,e.position.x,e.position.y,c,q.x,q.y) end end end end rcon.print(table.concat(o,';'))" 2>/dev/null | jq -r '.output // ""' | tr -d '[:space:]')
 sweep_in=0
 if [ -n "$low" ]; then
   IFS=';' read -ra lows <<< "$low"
@@ -177,53 +48,4 @@ if [ -n "$low" ]; then
 fi
 total_coal_in=$((total_coal_in + sweep_in))
 echo "sweep (burner machines under 3 coal): +${sweep_in} coal"
-
-# off-belt modules: RELOC + adopted module A -- own output chest, swept by hand
-"$LIB/walk.sh" "$seat" -29 -42 3 >/dev/null 2>&1
-di=$("$LIB/act.sh" insert "$seat" x=-32 y=-44 name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
-fi=$("$LIB/act.sh" insert "$seat" x=-30 y=-44 name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
-oi=$("$LIB/act.sh" insert "$seat" x=-28.5 y=-44 name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-pt=$("$LIB/act.sh" take "$seat" x=-27.5 y=-43.5 name=iron-plate target=iron-chest | jq -r '.taken // 0')
-total_coal_in=$((total_coal_in + di + fi + oi))
-total_plates=$((total_plates + pt))
-echo "reloc (-32,-44)/(-30,-44): drill+${di} furnace+${fi} out-inserter+${oi} coal, took ${pt} plates from output chest"
-
-da=$("$LIB/act.sh" insert "$seat" x=-34 y=-42 name=coal count="$coal" target=burner-mining-drill | jq -r '.inserted // 0')
-fa=$("$LIB/act.sh" insert "$seat" x=-32 y=-42 name=coal count="$coal" target=stone-furnace | jq -r '.inserted // 0')
-oa=$("$LIB/act.sh" insert "$seat" x=-30.5 y=-42 name=coal count=20 target=burner-inserter | jq -r '.inserted // 0')
-pa=$("$LIB/act.sh" take "$seat" x=-29.5 y=-41.5 name=iron-plate target=iron-chest | jq -r '.taken // 0')
-total_coal_in=$((total_coal_in + da + fa + oa))
-total_plates=$((total_plates + pa))
-echo "module A (-34,-42)/(-32,-42): drill+${da} furnace+${fa} out-inserter+${oa} coal, took ${pa} plates from output chest"
-
-echo "TOTAL: coal inserted=$total_coal_in plates collected=$total_plates"
-
-# 2026-09-26: the gear assembler's input chest (-38.5,-8.5) is fed by the belt
-# now, but keep this as a backstop in case it backs up or drops.
-GEAR_X=-38.5
-GEAR_Y=-8.5
-GEAR_TARGET=0  # belt feeds this chest; iron on hand goes to the ammo assembler first (2026-10-02, iron shortage)
-gear_have=$(RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "local c=game.surfaces[1].find_entities_filtered{position={$GEAR_X,$GEAR_Y},radius=1,name='iron-chest'}[1] rcon.print(c and c.get_inventory(defines.inventory.chest).get_item_count('iron-plate') or -1)" 2>/dev/null | jq -r '.output // "-1"' | tr -d '[:space:]')
-echo "gear-asm chest (${GEAR_X},${GEAR_Y}) currently has ${gear_have} iron"
-if [ "${gear_have:-0}" -ge 0 ] 2>/dev/null; then
-  need=$((GEAR_TARGET - gear_have))
-  if [ "$need" -gt 0 ]; then
-    "$LIB/walk.sh" "$seat" "$GEAR_X" "$GEAR_Y" 3 >/dev/null 2>&1
-    fed=$("$LIB/act.sh" insert "$seat" x=$GEAR_X y=$GEAR_Y name=iron-plate count="$need" target=iron-chest | jq -r '.inserted // 0')
-    echo "topped up gear-asm chest by ${fed} iron (target ${GEAR_TARGET})"
-  else
-    echo "gear-asm chest already at/above target, skipping"
-  fi
-fi
-
-if [ "$deposit" = 1 ]; then
-  have=$("$LIB/act.sh" observe "$seat" radius=1 | jq -r '.snapshot.inventory["iron-plate"] // 0')
-  drop=$((have - BUFFER))
-  if [ "$drop" -gt 0 ]; then
-    "$LIB/walk.sh" "$seat" 0.5 -21 3 >/dev/null 2>&1
-    got=$("$LIB/act.sh" insert "$seat" x=$DEPOT_X y=$DEPOT_Y name=iron-plate count="$drop" target=iron-chest | jq -r '.inserted // 0')
-    echo "deposited $got iron-plate to depot ($DEPOT_X,$DEPOT_Y), kept $BUFFER on hand"
-  else
-    echo "only $have iron-plate on hand (<=$BUFFER buffer), skipping depot drop"
-  fi
-fi
+echo "TOTAL: coal inserted=$total_coal_in"
