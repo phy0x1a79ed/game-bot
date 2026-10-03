@@ -5,7 +5,7 @@ Each entity is built from the nearest stand point (<=9.8 tiles). Walks between s
 import sys, subprocess, math, json, re
 LIB="/home/tony/agentic_workspace/projects/game-bot/factorio/research/lib"
 import os
-SEAT=os.environ.get("RLM_SEAT","seat-4e5a1d24")
+SEAT=os.environ.get("RLM_SEAT") or sys.exit("build-list.py: set RLM_SEAT to your own seat id")
 D={'N':'north','E':'east','S':'south','W':'west','north':'north','east':'east','south':'south','west':'west'}
 def sh(*a):
     return subprocess.run(a,capture_output=True,text=True).stdout
