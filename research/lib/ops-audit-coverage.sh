@@ -3,7 +3,8 @@
 # prints a TSV: class recipe items machines working per_min stock idle_status net_stock. class a = made now, b = stock only, c = none.
 R=/home/tony/agentic_workspace/projects/game-bot/factorio/research
 win=${1:-150}
-snap() { RLM_SEAT=${RLM_SEAT:-seat-03ce23d6} "$R/rlm.sh" exec-lua --code "$(cat "$R/lib/ops-audit-coverage.lua")" | jq -r .output; }
+# One sweep costs ~28 ms of engine script time, so it declares budget_ms=40 instead of tripping OVER_BUDGET.
+snap() { "$R/lib/act.sh" exec_lua "${RLM_SEAT:-seat-03ce23d6}" path="$R/lib/ops-audit-coverage.lua" budget_ms=40 | jq -r .output; }
 a=$(snap); sleep "$win"; b=$(snap)
 awk -F'|' -v A="$a" -v B="$b" 'BEGIN {
   n = split(A, la, "\n"); for (i = 1; i <= n; i++) { if (la[i] ~ /^tick/) { split(la[i], t, " "); t0 = t[2] } else { split(la[i], f, "|"); c0[f[2]] = f[7] } }
