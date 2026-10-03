@@ -52,8 +52,10 @@ done
 lua 'player.clear_cursor() rcon.print("cursor cleared")' >/dev/null
 # The repair walk can end in a pocket between turrets, walls and pipes that the
 # pathfinder cannot leave; every later step of the upkeep loop then fails out of
-# reach. Walk back to the depot and say so on the board when that fails.
-if ! "$LIB/walk.sh" "$seat" 0.5 -21 4 >/dev/null 2>&1; then
+# reach. Walk back to the depot and say so on the board when that fails. Only
+# the upkeep loop wants this: a lane running repair.sh by hand stays where it is.
+called_by=$(ps -o args= -p "$PPID" 2>/dev/null)
+if [[ $called_by == *upkeep.sh* ]] && ! "$LIB/walk.sh" "$seat" 0.5 -21 4 >/dev/null 2>&1; then
   pos=$(lua 'rcon.print(string.format("(%.1f,%.1f)",player.position.x,player.position.y))')
   echo "[$(date +%H:%M) upkeep] ALERT upkeep seat $seat is stuck at $pos after the repair pass: free it (mine a blocking leftover, then walk out)" >> "$LIB/../crew/BOARD.md"
   echo "STUCK at $pos"
