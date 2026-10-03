@@ -32,7 +32,7 @@ fi
 px=$sx; py=$sy; misses=0
 nudges=("0 0" "1 0" "0 1" "-1 0" "0 -1" "2 2" "-2 -2")
 for n in "${nudges[@]}"; do
-  set -- $n; tx=$(echo "$x + $1" | bc); ty=$(echo "$y + $2" | bc)
+  set -- $n; tx=$(printf '%.2f' "$(echo "$x + $1" | bc -l)"); ty=$(printf '%.2f' "$(echo "$y + $2" | bc -l)")
   "$LIB/act.sh" move "$seat" x="$tx" y="$ty" >/dev/null 2>&1
   still=0; last=""
   for i in $(seq 1 90); do

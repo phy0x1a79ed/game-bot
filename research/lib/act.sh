@@ -7,7 +7,10 @@ verb=$1; seat=$2; shift 2
 args=$(jq -n --arg seat "$seat" '{seat_id:$seat}')
 for kv in "$@"; do
   k=${kv%%=*}; v=${kv#*=}
-  if [[ $v =~ ^-?[0-9]+(\.[0-9]+)?$ || $v == true || $v == false ]]; then
+  if [[ $v =~ ^-?[0-9]*\.?[0-9]+$ ]]; then
+    v=$(printf '%s' "$v" | sed -E 's/^(-?)\./\10./')
+    args=$(jq --arg k "$k" --argjson v "$v" '.[$k]=$v' <<<"$args")
+  elif [[ $v == true || $v == false ]]; then
     args=$(jq --arg k "$k" --argjson v "$v" '.[$k]=$v' <<<"$args")
   else
     args=$(jq --arg k "$k" --arg v "$v" '.[$k]=$v' <<<"$args")
