@@ -136,7 +136,15 @@ parallel took 2.7 seconds against 6.6 in series.
 Unpaused the run 3 end save at tick 1225470. Space Age 2.1.20 is active, so the
 game is won at the solar system edge; this run aims at the first rocket. Plan:
 `~/.claude/plans/factorio-run4.md`. Saves: `run4-oil-processing`,
-`run4-oil-park`, `run4-first-blue`, `run4-n-field`.
+`run4-oil-park`, `run4-first-blue`, `run4-n-field`, `run4-blue-science`,
+`run4-power-27mw`, `run4-blue-module4`, and `run4-checkpoint-t<tick>` every
+30 minutes.
+
+The user redirected the run at tick 2059k: a Space Age win needs massive
+industry, so the standing goal is to grow production, with the rocket as one
+milestone on the way. Baseline then (per minute, 10-minute average): iron 451,
+copper 117, steel 40, bricks 3, green circuits 30, red circuits 8, plastic 14,
+science 14 red / 14 green / 5-14 blue.
 
 **Seats**
 
@@ -193,11 +201,37 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
 - A mass of about 80 small biters stages at (-48,-211). Seats died twice near
   (-57,-80) on the way north.
 - Engine units cannot be hand-crafted; they need an assembling machine 2.
+- Advanced oil processing and cracking (tick ~1780k): R1 and R2 on advanced,
+  heavy cracking (56.5,8.5), light cracking (56.5,15.5) (60.5,15.5), cracked
+  gas back into R2's gas pipe by a tunnel on x=53.5. Gas capacity went from
+  1080 to 2340/min on the same 40 crude/s. A refinery needs 10 water/s.
+  Lubricant needs heavy oil only: plant (60.5,0.5) into tank (64.5,0.5).
+  Solid fuel (56.5,22.5) into chest (56.5,25.5) is the first gas sink to cut
+  when power coal runs short.
+- Sulfuric acid: sulfur plant (70.5,17.5), acid plant (70.5,21.5), tank
+  (69.5,24.5), about 1200 acid/min, sulfur-limited. A plain inserter between
+  two chemical plants moves 0.83 items/s: use a fast inserter.
+- The pipeline and power corridor north of the base is the weak point. One
+  wave at tick ~1890k destroyed 10 pipe-to-ground on y=-80.5 and big poles
+  (-54,-88) (-70,-109), and crude, P1 and the NW drills all stopped.
+- Turrets at a lone pump draw waves. P1 ran an hour untouched with none, then
+  lost 4 unwalled turrets and 6 walled ones in two waves while the pump took
+  only splash. Give a lone asset that neither pollutes nor shoots 10+ turrets
+  behind a full wall, or none.
 
 **Power**
 
 - Power block 4: boilers (-44.5,-29), (-41.5,-29), 4 engines, own offshore
   pump (-74.5,-29.5) and pipe y=-29.5, coal off belt y=-26.5. Capacity 9.0 MW.
+- Power block 5 (tick 1851k): 10 boilers (56.5..83.5,-22) facing south, 20
+  engines, own offshore pump (-49.5,-4.5) with water underground on x=-47.5
+  and y=-22.5, own 7 coal drills (74.5,-46.5..-28.5) on belt x=76.5. Capacity
+  27 MW; block 5 alone carries the base.
+- Coal caps power, not engines: 1 MW burns 15 coal/min. Electric coal drills
+  slow in a brownout, so a dry boiler stays dry (spiral at tick 1767k). The
+  upkeep power pass refuels any boiler under 10 coal.
+- Read a coal drill's 5×5 mining area for stone before placing it. Stone on a
+  coal belt piles at every dead end and blocks the fuel behind it.
 
 **Iron**
 
@@ -216,6 +250,14 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   next iron is the NW patch (-144..-129,-160..-129), 640k, 104 tiles from the
   nearest spawner, or mining productivity.
 - All 8 copper furnaces are steel furnaces now (+90/min once demand draws it).
+- NW patch (tick ~1850k): 16 drills, a 225-tile ore belt to bank 2 (x 2..13,
+  y -45..-33, 12 steel furnaces, fuel off the ore belt's other lane), 413
+  plates/min onto P's north lane. Steel line: 10 steel furnaces off P, 74
+  steel/min into chests (39.5,-34.5) (37.5,-36.5).
+- Bank 1's splitter (-22.5,-30) must favour the science trunk (left). Favouring
+  P starved the labs of red once bank 2 filled P.
+- Copper is demand-limited at about 100/min: every belt full and 9000 plates
+  in chests. The next copper patch is (281,-293), 3.1M.
 
 **Defense**
 
@@ -240,6 +282,13 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   cut twice. Run pipes behind a wall underground.
 - The north wall's east corner and the iron column's NW flank lose a turret to
   most waves; both are now walled groups of six.
+- Medium biters from evolution 0.2 (tick ~1840k). At 0.22 a walled row of four
+  on piercing still died at the coal patch: build two rows deep. A wall-tip
+  turret burns about 44 piercing per west wave, so keep tips on yellow.
+- Bricks cap walls. Brick line: drill (59.5,-28.5), furnace (59,-31), chest
+  (59.5,-33.5).
+- Killing spawners raises evolution: 0.204 to 0.257 in the hour the user
+  cleared five nest groups.
 
 **Science**
 
@@ -262,6 +311,20 @@ game is won at the solar system edge; this run aims at the first rocket. Plan:
   fills with the other pack on both lanes and the missing one never arrives.
   A long-handed inserter over a one-tile underground gap hands packs lab to
   lab across a belt. 10 labs read fully fed at tick 1671k.
+- Labs consumed machine blue over a full upkeep cycle at tick 1702k (T6).
+- Blue modules 3 and 4 (tick ~1940k) copy module 2 at (+56,+8) and (+36,+8),
+  east of the crude line, fed by M' (y=26.5) and a loop belt y=45.5: blue 14/min
+  total. With blue fixed, red became the lab cap.
+
+**Upkeep and seats**
+
+- A seat walked into a pocket between turrets, walls and pipes cannot walk out,
+  and every later upkeep step fails out of reach without error. The repair pass
+  now walks the upkeep seat back to the depot and posts a board ALERT if it is
+  stuck. Free a seat by mining the blocking piece, walking out, and rebuilding it.
+- A script that looks entities up by name breaks silently when a furnace is
+  upgraded: service-copper.sh skipped every steel-swapped copper furnace for
+  hours. Look furnaces up by type.
 
 ### 2026-10-02 — run 3: the same crew, from the run 2 end save
 
