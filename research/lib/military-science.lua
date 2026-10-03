@@ -8,7 +8,7 @@ local s = game.surfaces[1]
 local N, E, S, W = defines.direction.north, defines.direction.east, defines.direction.south, defines.direction.west
 local L = {}
 local STAGE = 1
-local STAGES = {[1]=true,[2]=true}
+local STAGES = {[3]=true,[4]=true,[5]=true}
 local function add(name, x, y, dir, extra) L[#L + 1] = {name = name, x = x, y = y, dir = dir or N, extra = extra, stage = STAGE} end
 local function belts(x0, x1, y, dir) local st = x0 <= x1 and 1 or -1 for x = x0, x1, st do add('transport-belt', x, y, dir) end end
 local function beltsy(x, y0, y1, dir) local st = y0 <= y1 and 1 or -1 for y = y0, y1, st do add('transport-belt', x, y, dir) end end
@@ -30,8 +30,8 @@ am(19.5, -52.5, 'piercing-rounds-magazine'); am(27.5, -52.5, 'piercing-rounds-ma
 am(22.5, -45.5, 'piercing-rounds-magazine'); am(30.5, -45.5, 'piercing-rounds-magazine'); am(26.5, -45.5, 'firearm-magazine')
 for _, x in pairs({19.5, 27.5}) do add('inserter', x, -50.5, S); end
 for _, x in pairs({22.5, 24.5}) do add('long-handed-inserter', x, -50.5, S) end
-for _, x in pairs({22.5, 30.5}) do add('long-handed-inserter', x, -47.5, N) end
-for _, x in pairs({25.5, 27.5}) do add('inserter', x, -47.5, N) end
+for _, x in pairs({21.5, 22.5, 23.5, 29.5, 30.5, 31.5}) do add('long-handed-inserter', x, -47.5, N) end
+for _, x in pairs({25.5, 27.5}) do add('inserter', x, -47.5, N) end; add('fast-inserter', 26.5, -47.5, N)
 add('inserter', 21.5, -52.5, E); add('inserter', 25.5, -52.5, W); add('inserter', 24.5, -45.5, E); add('inserter', 28.5, -45.5, W)
 for _, x in pairs({22.5, 30.5}) do add('inserter', x, -43.5, N) end
 belts(22.5, 37.5, -42.5, E)
