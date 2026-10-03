@@ -11,6 +11,12 @@ seat=$1; max=${2:-20}
 lua() { RLM_SEAT="$seat" "$LIB/../rlm.sh" exec-lua --code "$1" 2>/dev/null | jq -r '.output // ""'; }
 list=$(lua 'local o={} local p=player.position for _,e in pairs(game.surfaces[1].find_entities_filtered{force="player"}) do if e.type~="character" and e.health and e.max_health and e.health<e.max_health then o[#o+1]=string.format("%.2f,%.2f,%.1f",e.position.x,e.position.y,(e.position.x-p.x)^2+(e.position.y-p.y)^2) end end table.sort(o,function(a,b) return tonumber(a:match("[^,]*$"))<tonumber(b:match("[^,]*$")) end) rcon.print(table.concat(o,";"))')
 [ -z "$list" ] && { echo "nothing damaged"; exit 0; }
+packs=$(lua 'rcon.print(player.get_main_inventory().get_item_count("repair-pack"))')
+if [ "${packs:-0}" -lt 5 ] 2>/dev/null; then
+  "$LIB/walk.sh" "$seat" 0.5 -21 3 >/dev/null 2>&1
+  got=$("$LIB/act.sh" take "$seat" x=0.5 y=-19.5 name=repair-pack count=50 target=iron-chest 2>/dev/null | jq -r '.taken // 0')
+  echo "repair packs from depot (0.5,-19.5): +${got}"
+fi
 n=0
 IFS=';' read -ra items <<< "$list"
 for it in "${items[@]}"; do
