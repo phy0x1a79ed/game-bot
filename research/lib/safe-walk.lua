@@ -126,6 +126,6 @@ if dt > LEG then wp = {x = pos.x + (TX - pos.x) * LEG / dt, y = pos.y + (TY - po
 wp = s.find_non_colliding_position('character', wp, 3, 0.5) or wp
 
 rcon.print(string.format(
-  'dead=0 wx=%.1f wy=%.1f tick=%d x=%.1f y=%.1f hp=%.0f max=%.0f d=%.1f walk=%d units=%d close=%d near=%s nd=%.1f cx=%.1f cy=%.1f worm=%s ammo=%d range=%.0f fire=%d fol=%d fly=%d dep=%d defs=%d',
+  'dead=0 wx=%.1f wy=%.1f tick=%d x=%.1f y=%.1f hp=%.0f max=%.0f d=%.1f walk=%d units=%d close=%d near=%s nd=%.1f cx=%.1f cy=%.1f worm=%s ammo=%d range=%.0f fire=%d fol=%d fly=%d dep=%d defs=%d cid=%d',
   wp.x, wp.y, game.tick, pos.x, pos.y, c.health, c.max_health, dt, c.walking_state.walking and 1 or 0,
-  #units, close, near and near.name or 'none', near and nd or -1, cx, cy, worm, ammo, range, fire, fol, flying, dep - 0, defs - dep))
+  #units, close, near and near.name or 'none', near and nd or -1, cx, cy, worm, ammo, range, fire, fol, flying, dep - 0, defs - dep, c.unit_number or 0))

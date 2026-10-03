@@ -22,7 +22,7 @@ tmp=$(mktemp /tmp/safe-walk-XXXX.lua); trap 'rm -f "$tmp"' EXIT
 
 step() {  # step MODE TX TY -> sets V_<key> from the Lua's key=value line
   { echo "local SEAT,MODE,TX,TY,R,CLOSE_R,SCREEN,FORCE_SCREEN,LEG,RMAX='$seat','$1',$2,$3,$R,$CLOSE_R,$SCREEN,$FORCE_SCREEN,$LEG,$RMAX"
-    cat "$L/safe-walk.lua"; } >"$tmp"
+    grep -v "^[[:space:]]*--" "$L/safe-walk.lua" | sed "s/^[[:space:]]*//"; } >"$tmp"
   local out try
   for try in 1 2 3; do   # a transport error (broken pipe, timeout) is retried; a Lua error is not
     out=$("$L/act.sh" exec_lua "$seat" path="$tmp" | jq -r '.output // .')
@@ -43,13 +43,15 @@ line() {
     "$V_fire" "$V_fol" "$V_fly" "$V_defs" "$V_ammo" "${2:+ | $2}"
 }
 
-mode=walk; tx=$gx; ty=$gy; leg=0; stall=0; hold=0; screened=0; start=$SECONDS; lastpos=""; grp=""
+cid0=""; mode=walk; tx=$gx; ty=$gy; leg=0; stall=0; hold=0; screened=0; start=$SECONDS; lastpos=""; grp=""
 nudges=("0 0" "1 0" "0 1" "-1 0" "0 -1" "2 2" "-2 -2" "3 -3")
 while :; do
   leg=$((leg + 1))
   step leg "$tx" "$ty"
   [ "$V_dead" = 1 ] && finish "aborted seat dead at leg $leg" 1
   [ "$V_dead" = err ] && { halt; finish "aborted lua error" 1; }
+  [ -z "$cid0" ] && cid0=$V_cid
+  [ -n "$V_cid" ] && [ "$V_cid" != "$cid0" ] && { halt; finish "aborted seat died and RESPAWNED at ($V_x,$V_y) during the walk (character changed)" 1; }
   (( SECONDS - start > MAXT )) && { halt; finish "aborted time limit ${MAXT}s at ($V_x,$V_y) hp $V_hp" 1; }
   note=""; [ "$V_dep" = 1 ] && note="defender thrown"
 
