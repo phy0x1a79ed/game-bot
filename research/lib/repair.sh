@@ -54,8 +54,21 @@ lua 'player.clear_cursor() rcon.print("cursor cleared")' >/dev/null
 # pathfinder cannot leave; every later step of the upkeep loop then fails out of
 # reach. Walk back to the depot and say so on the board when that fails. Only
 # the upkeep loop wants this: a lane running repair.sh by hand stays where it is.
+# A short step straight out usually frees it (2026-10-02: wedged twice between
+# turrets (25,71) and (27,71); a 3-tile walk north worked both times).
+escape() {
+  local at px py
+  at=$(lua 'rcon.print(string.format("%.1f %.1f",player.position.x,player.position.y))')
+  read -r px py <<< "$at"
+  for d in "0 -3" "0 3" "-3 0" "3 0"; do
+    set -- $d
+    "$LIB/walk.sh" "$seat" "$(echo "$px + $1" | bc)" "$(echo "$py + $2" | bc)" 1 >/dev/null 2>&1 && return 0
+  done
+  return 1
+}
 called_by=$(ps -o args= -p "$PPID" 2>/dev/null)
-if [[ $called_by == *upkeep.sh* ]] && ! "$LIB/walk.sh" "$seat" 0.5 -21 4 >/dev/null 2>&1; then
+if [[ $called_by == *upkeep.sh* ]] && ! "$LIB/walk.sh" "$seat" 0.5 -21 4 >/dev/null 2>&1 \
+   && ! { escape && "$LIB/walk.sh" "$seat" 0.5 -21 4 >/dev/null 2>&1; }; then
   pos=$(lua 'rcon.print(string.format("(%.1f,%.1f)",player.position.x,player.position.y))')
   echo "[$(date +%H:%M) upkeep] ALERT upkeep seat $seat is stuck at $pos after the repair pass: free it (mine a blocking leftover, then walk out)" >> "$LIB/../crew/BOARD.md"
   echo "STUCK at $pos"
