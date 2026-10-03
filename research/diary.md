@@ -131,6 +131,88 @@ parallel took 2.7 seconds against 6.6 in series.
 
 ## Entries
 
+### 2026-10-02 — run 4: oil, blue science and the road to the rocket
+
+Unpaused the run 3 end save at tick 1225470. Space Age 2.1.20 is active, so the
+game is won at the solar system edge; this run aims at the first rocket. Plan:
+`~/.claude/plans/factorio-run4.md`. Saves: `run4-oil-processing`,
+`run4-oil-park`.
+
+**Seats**
+
+- A seat is a lease reclaimed after one hour idle, and a paused world does not
+  hold it. Every run 3 seat except one was reclaimed during the pause, body and
+  inventory included. Join a fresh seat per lane with `factorio-join
+  --session-id <s> --owner <lane>` and record it in `crew/SEATS.md`. Restart
+  the upkeep loop on its new seat.
+
+**Rocket path (live tech tree)**
+
+- `rocket-silo` costs red, green and blue only (1000 × 60 s). Its closure is
+  concrete, rocket-fuel, processing-unit, logistic-robotics,
+  low-density-structure and advanced-material-processing-2: about 2650 blue
+  units. Purple and yellow science are not on the first-rocket path.
+- `oil-processing` is a trigger tech: it completes when a pumpjack first mines
+  crude. The pumpjack unlocks with `oil-gathering`. It unlocks the refinery,
+  the chemical plant and basic oil processing.
+- The silo needs 1000 steel, 200 processing units, 200 electric engines and
+  1000 concrete. One rocket is 50 rocket parts.
+
+**Oil**
+
+- 11 crude wells lie within 512 tiles. South: one well (-56.5,177.5), 330k,
+  about 11 crude/s. North: 7 wells at (-220..-241,-300..-312), 3.6M, about
+  120 crude/s, 382 tiles out, spawners 89-101 tiles from it. A pumpjack makes
+  10 crude/s × amount/300000. The south well alone cannot carry the rocket
+  (about 125k petroleum gas needed, 79k from its life on basic oil); the north
+  field is stage 2.
+- Built: pole line of big poles (18,72) (2,94) (-13,116) (-29,138) (-44,160)
+  (-50,171) to the south well; pumpjack into tank (-53.5,181.5); 3 turrets.
+  Crude pipeline north on x=-54.5, east on y=76.5, north on x=66.5, west on
+  y=-8.5 into refinery R1 (46.5,-4.5), 29 underground pairs. R2 stub at
+  (53.5,-7.5). Plastic plant (34.5,2.5) → chest (34.5,5.5), about 20/min.
+  Sulfur plant (38.5,2.5) → chest (38.5,5.5), about 22/min. Water: offshore
+  pump (-63.5,29.5), pipe y=30.5, then x=36.5 north.
+- Pipe-to-ground: the build direction is the side of the surface opening. For
+  flow direction D, build the entrance facing opposite(D) and the exit facing
+  D. The exit may sit up to 10 tiles from the entrance. A turn needs one plain
+  pipe at the corner.
+- Offshore pump: the build direction is the water side. `can_place_entity`
+  reads true everywhere for pumps; try `build` positions and directions until
+  one lands.
+
+**Power**
+
+- Power block 4: boilers (-44.5,-29), (-41.5,-29), 4 engines, own offshore
+  pump (-74.5,-29.5) and pipe y=-29.5, coal off belt y=-26.5. Capacity 9.0 MW.
+
+**Iron**
+
+- Any consumer on the iron trunk x=-19.5 above y=-30 takes iron before
+  science does. Three magazine assemblers there, filling 1400 magazines of
+  chest, starved 7 of 8 labs at tick 1373k. Put new iron consumers downstream
+  of science or on their own supply, and bar their chests to 1 slot.
+- Furnace result slots read 0 on the column: their output inserters empty
+  them at once. Take plates from a belt or the depot.
+
+**Defense**
+
+- North wall now runs to x=-8.5 and turns south; turrets (-14,-68),
+  (-12,-66). A wave of about 120 small biters died there with no loss.
+- Pump wall: y=-30.5 from x=-74.5 to -47.5, then south 2 tiles.
+- A pair of turrets at a field's edge dies to about 50 small biters. Use a row
+  of 4 or a group of 3 overlapping.
+- Spawners within 330 tiles rose from 19 to 23 by tick 1340k: nests expand.
+- Hand-crafted magazines fill the pistol ammo slot first (100); `insert`
+  reads only the main inventory.
+
+**Science**
+
+- 8 labs; green assemblers swapped to AM2 (18/min); third red module at
+  (-25.5,0.5)/(-25.5,4.5) on its own belt x=-22.5. The lab belt's east end is
+  a side-load: everything on the pack belt lands on one lane, so red feeds
+  through the stub on the other lane.
+
 ### 2026-10-02 — run 3: the same crew, from the run 2 end save
 
 Reloaded `shutdown-2026-09-26` at tick 919759. Lanes: upkeep and defense,
