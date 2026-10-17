@@ -1,4 +1,4 @@
-"""fxlab CLI: up, down, ls, lua, advance, save."""
+"""fxlab CLI: up, down, ls, lua, advance, save, waits."""
 import argparse
 import sys
 
@@ -29,6 +29,11 @@ def main(argv=None):
     sv = sub.add_parser("save")
     sv.add_argument("name")
     sv.add_argument("save")
+    wt = sub.add_parser("waits", help="wait census: what the factory waits for, largest first")
+    wt.add_argument("name")
+    wt.add_argument("--surface", default="nauvis")
+    wt.add_argument("--area", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
+    wt.add_argument("-n", type=int, default=15)
     a = p.parse_args(argv)
 
     if a.cmd == "up":
@@ -52,6 +57,14 @@ def main(argv=None):
         print(f"{Lab(a.name).advance(a.ticks, a.speed):.1f}s")
     elif a.cmd == "save":
         print(Lab(a.name).save(a.save))
+    elif a.cmd == "waits":
+        from . import waits
+        area = ((a.area[0], a.area[1]), (a.area[2], a.area[3])) if a.area else None
+        r = waits.census(Lab(a.name), a.surface, area)
+        print("\n".join(waits.top(r, a.n)) or "no waits")
+        print("blocked: " + ", ".join(f"{b['item']} {b['machines']}" for b in r["blocked"][:a.n]))
+        if r["other"]:
+            print("other: " + ", ".join(f"{k} {v}" for k, v in sorted(r["other"].items())))
 
 
 if __name__ == "__main__":

@@ -121,3 +121,49 @@ def bench_redgreen(lab):
     ok = near(red, 63, 6.3) and near(green, 57, 5.7)
     return Result(ok, f"red {red:.1f}/min green {green:.1f}/min, unhandled {r['unhandled']}",
                   data={"rating": {k: r[k] for k in ("outputs", "inputs", "utilisation")}})
+
+
+def waits_cell(lab, cut=None):
+    """Build the red-science cell, run a minute, optionally cut one input and run a minute more."""
+    from . import waits
+    cell = LUA / "fixture-waits.lua"
+    if "deleted" in lab.lua_file(cell, prelude="WC_CUT = nil\n"):
+        lab.lua_file(cell, prelude="WC_CUT = nil\n")
+    lab.advance(3600)
+    if cut:
+        lab.lua_file(cell, prelude=f'WC_CUT = "{cut}"\n')
+        lab.advance(3600)
+    r = waits.census(lab, "wc")
+    return r, "; ".join(waits.top(r)) or "no waits"
+
+
+@fixture(tags={"waits"})
+def waits_clean(lab):
+    """A fed cell waits for nothing; its gear assembler shows as output-blocked, not as a wait."""
+    r, detail = waits_cell(lab)
+    ok = not r["waits"] and [b["item"] for b in r["blocked"]] == ["iron-gear-wheel"]
+    return Result(ok, detail)
+
+
+@fixture(tags={"waits"})
+def waits_cut_copper(lab):
+    r, detail = waits_cell(lab, "copper-plate")
+    return Result(bool(r["waits"]) and r["waits"][0]["item"] == "copper-plate", detail)
+
+
+@fixture(tags={"waits"})
+def waits_cut_iron(lab):
+    """Cutting iron starves gears too: the root, iron-plate, must rank above the derived gear wait."""
+    r, detail = waits_cell(lab, "iron-plate")
+    items = [w["item"] for w in r["waits"]]
+    ok = items[:1] == ["iron-plate"] and any(w["item"] == "iron-gear-wheel" and w["derived"] for w in r["waits"])
+    return Result(ok, detail)
+
+
+@fixture(source="run4-closeout", tags={"waits", "slow"})
+def waits_run4(lab):
+    """The post-mortem found run 4 iron-starved: the census on its closeout must name iron-plate first."""
+    from . import waits
+    r = waits.census(lab)
+    return Result(bool(r["waits"]) and r["waits"][0]["item"] == "iron-plate", "; ".join(waits.top(r, 5)),
+                  data={"top": waits.top(r, 15), "other": r["other"]})
