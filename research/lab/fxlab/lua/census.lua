@@ -38,6 +38,11 @@ for _, s in pairs(game.surfaces) do
         for i = 1, e.get_max_transport_line_index() do add_contents(e.get_transport_line(i).get_contents()) end
       elseif t == "inserter" then
         if e.held_stack.valid_for_read then add(world, e.held_stack.name, e.held_stack.count) end
+      elseif t == "mining-drill" and e.status == defines.entity_status.waiting_for_space_in_destination then
+        -- a blocked drill holds one mined item, already counted as made, in no inventory
+        local target = e.mining_target
+        local products = target and target.prototype.mineable_properties.products
+        if products and products[1] and products[1].type == "item" then add(world, products[1].name, 1) end
       end
     end
   end

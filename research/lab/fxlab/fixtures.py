@@ -110,6 +110,13 @@ def balance_run4_untouched(lab):
     return Result(v.ok, v.summary(), data={"excused": v.explained_by_losses})
 
 
+@fixture(source="run4-closeout", tags={"balance", "slow"})
+def balance_run4_short(lab):
+    """Short windows right after load: blocked drills each hold a mined item that the census must count."""
+    verdicts = [windowed(lab, ticks=2700)[0] for _ in range(3)]
+    return Result(all(v.ok for v in verdicts), "; ".join(v.summary() for v in verdicts))
+
+
 @fixture(source="run4-closeout", tags={"bench", "slow"})
 def bench_redgreen(lab):
     """Capture the run 4 red/green block from the live base and rate it: the post-mortem bench read 63 and 57."""
