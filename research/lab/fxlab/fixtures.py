@@ -216,3 +216,44 @@ def acts_window_balanced(lab):
           and [e["name"] for e in built] == ["transport-belt"] and not left)
     return Result(ok, f"{v.summary()}; spilled {swap.get('spilled')}; built {[e['name'] for e in built]}; "
                       f"chest left {bool(left)}")
+
+
+@fixture(tags={"acts"})
+def acts_reads(lab):
+    """The read-only acts see the mini-factory as it is: two ore patches with one drill each, a robot network, gears made."""
+    from . import acts
+    mini_factory(lab)
+    ore = {p["name"]: p for p in acts.act(lab, "resources", "fx", x0=-20, y0=-20, x1=20, y1=20)["did"]}
+    net = acts.act(lab, "network", "fx", x=10, y=-10)
+    rate = acts.act(lab, "rate", "fx", items=["iron-gear-wheel"])["did"]["iron-gear-wheel"]
+    counted = acts.act(lab, "look", "fx", x0=-20, y0=-20, x1=20, y1=20, count=True)["did"]
+    ok = (ore.get("iron-ore", {}).get("drills") == 1 and ore.get("coal", {}).get("drills") == 1
+          and net["ok"] and net["did"]["construction_robots"] == 10 and rate["made_1m"] > 0
+          and counted.get("assembling-machine-2") == 1)
+    return Result(ok, f"ore {sorted(ore)}; robots {net.get('did', {}).get('construction_robots')}; "
+                      f"gears {rate['made_1m']:.1f}/min; machines {counted.get('assembling-machine-2')}")
+
+
+@fixture(tags={"acts"})
+def acts_ghost_hint(lab):
+    """A ghost aimed at an occupied tile is refused naming what is there, and the spot it suggests takes the ghost."""
+    import re
+    from . import acts
+    mini_factory(lab)
+    miss = acts.act(lab, "ghost", "fx", name="assembling-machine-2", x=-0.5, y=-6.5)
+    m = re.search(r"fits is \((-?[\d.]+), (-?[\d.]+)\)", miss.get("refused", ""))
+    hit = m and acts.act(lab, "ghost", "fx", name="assembling-machine-2", x=float(m[1]), y=float(m[2]))
+    ok = not miss["ok"] and "iron-chest" in miss["refused"] and bool(hit) and hit["ok"]
+    return Result(ok, f"{miss.get('refused')}; then {hit.get('did') if hit else 'no hint'}")
+
+
+@fixture(tags={"acts"})
+def acts_construction_reach(lab):
+    """Robots build past the logistic area (25 tiles): a point 30 tiles from the roboport is covered, one 80 off is not."""
+    from . import acts
+    mini_factory(lab)
+    inside = acts.act(lab, "network", "fx", x=40, y=-10)
+    ghost = acts.act(lab, "ghost", "fx", name="transport-belt", x=39.5, y=-10.5)
+    outside = acts.act(lab, "network", "fx", x=90, y=-10)
+    ok = inside["ok"] and ghost["ok"] and not ghost.get("warn") and not outside["ok"] and "nearest roboport" in outside["refused"]
+    return Result(ok, f"30 tiles: {inside['ok']}, ghost warn {ghost.get('warn')}; 80 tiles: {outside.get('refused')}")

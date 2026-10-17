@@ -1,7 +1,10 @@
 -- acts.lua: the safe-act surface. Expects ACT = {verb = ..., surface = ..., args = {...}}.
 -- Prints JSON {ok = true, did = ...} or {ok = false, refused = reason}. Every act checks before it acts,
 -- and none creates an item: entities appear only as ghosts that robots build from storage.
---   look {x0, y0, x1, y1, limit}      entities in an area, with recipe and status
+--   look {x0, y0, x1, y1, limit, count}   entities in an area, with recipe and status; count = true tallies names
+--   resources {x0, y0, x1, y1}        ore patches in an area: tiles, amount, extent and drills on each
+--   network {x, y}                    the robot network that builds at a point: robots, roboports, storage contents
+--   rate {items}                      made and used per minute, over the last minute and the last ten
 --   ghost {name, x, y, direction, recipe}   place one ghost
 --   blueprint {bp, x, y, direction}   place a blueprint string as ghosts
 --   remove {name, x, y}               order deconstruction of the one entity of that name on that tile
@@ -17,9 +20,20 @@ local function dir(d) return d and defines.direction[d] or defines.direction.nor
 local dir_name = {} for k, v in pairs(defines.direction) do dir_name[v] = k end
 local function fmt(e) return string.format("%s at (%.1f, %.1f)", e.name == "entity-ghost" and e.ghost_name .. " ghost" or e.name, e.position.x, e.position.y) end
 
+-- the network whose robots build at p: construction area, which reaches past the logistic area
+local function builder(p) return s.find_logistic_networks_by_construction_area(p, f)[1] end
+
+local function nearest_roboport(p)
+  local r = s.get_closest(p, s.find_entities_filtered{type = "roboport", force = "player"})
+  if not r then return "" end
+  local x, y = p.x or p[1], p.y or p[2]
+  return string.format("; nearest roboport is at (%.1f, %.1f), %d tiles away, and builds within %d tiles", r.position.x,
+    r.position.y, math.floor(math.sqrt((r.position.x - x) ^ 2 + (r.position.y - y) ^ 2)), r.prototype.construction_radius)
+end
+
 local function covered(p, item)
-  local net = f.find_logistic_network_by_position(p, s)
-  if not net then return "outside any robot network" end
+  local net = builder(p)
+  if not net then return "outside every roboport's construction area: robots will not build it" .. nearest_roboport(p) end
   if not item then return nil end
   local have = net.get_item_count(item)
   if have == 0 then return "robot network holds no " .. item end
@@ -37,18 +51,129 @@ local function on_tile(name)
   return nil, string.format("no %s covers (%.1f, %.1f)%s", name, A.x, A.y, near and "; nearest is " .. fmt(near) or "")
 end
 
+-- why spec does not fit, and the nearest position where it does
+local function blocked_by(proto, spec)
+  local b, x, y = proto.collision_box, spec.position[1], spec.position[2]
+  local area = {{x + b.left_top.x, y + b.left_top.y}, {x + b.right_bottom.x, y + b.right_bottom.y}}
+  local what = {}
+  for _, e in pairs(s.find_entities_filtered{area = area}) do
+    if e.type ~= "resource" then
+      local n = e.name == "entity-ghost" and e.ghost_name .. " ghost" or e.name
+      what[n] = (what[n] or 0) + 1
+    end
+  end
+  local water = s.count_tiles_filtered{area = area, collision_mask = "water_tile"}
+  if water > 0 then what["water tile"] = water end
+  local parts = {}
+  for n, c in pairs(what) do parts[#parts + 1] = c .. " " .. n end
+  table.sort(parts)
+  if proto.type == "mining-drill" and s.count_entities_filtered{area = area, type = "resource"} == 0 then
+    parts[#parts + 1] = "no ore under it"
+  end
+  local msg = string.format("%s does not fit at (%.1f, %.1f): %s", spec.name, x, y,
+    #parts > 0 and table.concat(parts, ", ") or "blocked by terrain")
+  -- nearest fitting position on this entity's grid, ring by ring
+  local ox = math.ceil(b.right_bottom.x - b.left_top.x) % 2 == 1 and 0.5 or 0
+  local oy = math.ceil(b.right_bottom.y - b.left_top.y) % 2 == 1 and 0.5 or 0
+  local cx, cy = math.floor(x - ox + 0.5) + ox, math.floor(y - oy + 0.5) + oy
+  for r = 1, 16 do
+    local best, bd
+    for dx = -r, r do for dy = -r, r do
+      if math.max(math.abs(dx), math.abs(dy)) == r then
+        spec.position = {cx + dx, cy + dy}
+        local d = dx * dx + dy * dy
+        if (not bd or d < bd) and s.can_place_entity(spec) then best, bd = spec.position, d end
+      end
+    end end
+    if best then return msg .. string.format("; nearest spot that fits is (%.1f, %.1f)", best[1], best[2]) end
+  end
+  return msg .. "; nothing fits within 16 tiles"
+end
+
 local acts = {}
 
 function acts.look()
   local list = {}
-  for _, e in pairs(s.find_entities_filtered{area = {{A.x0, A.y0}, {A.x1, A.y1}}, force = "player", limit = A.limit or 200}) do
+  if A.count then
+    for _, e in pairs(s.find_entities_filtered{area = {{A.x0, A.y0}, {A.x1, A.y1}}, force = "player"}) do
+      local n = e.name == "entity-ghost" and e.ghost_name .. " (ghost)" or e.name
+      list[n] = (list[n] or 0) + 1
+    end
+    return out{ok = true, did = list}
+  end
+  local limit = A.limit or 200
+  local area = {{A.x0, A.y0}, {A.x1, A.y1}}
+  for _, e in pairs(s.find_entities_filtered{area = area, force = "player", limit = limit}) do
     local r = nil
     if e.type == "assembling-machine" or e.type == "furnace" then r = e.get_recipe() r = r and r.name end
     list[#list + 1] = {name = e.name == "entity-ghost" and e.ghost_name .. " (ghost)" or e.name, x = e.position.x,
       y = e.position.y, direction = dir_name[e.direction], recipe = r, status = e.status and status_name[e.status] or nil,
       deconstruct = e.to_be_deconstructed() or nil}
   end
-  out{ok = true, did = list}
+  local total = #list < limit and #list or s.count_entities_filtered{area = area, force = "player"}
+  out{ok = true, did = list, more = total > #list and string.format("%d more not shown: narrow the area, or count=true", total - #list) or nil}
+end
+
+function acts.resources()
+  -- group ore by 32-tile chunk, then join touching chunks of the same ore into patches
+  local chunks = {}
+  for _, r in pairs(s.find_entities_filtered{area = {{A.x0, A.y0}, {A.x1, A.y1}}, type = "resource"}) do
+    local key = r.name .. "|" .. math.floor(r.position.x / 32) .. "|" .. math.floor(r.position.y / 32)
+    local c = chunks[key]
+    if not c then
+      c = {name = r.name, cx = math.floor(r.position.x / 32), cy = math.floor(r.position.y / 32), tiles = 0, amount = 0,
+        x0 = r.position.x, y0 = r.position.y, x1 = r.position.x, y1 = r.position.y}
+      chunks[key] = c
+    end
+    c.tiles, c.amount = c.tiles + 1, c.amount + r.amount
+    c.x0, c.y0 = math.min(c.x0, r.position.x), math.min(c.y0, r.position.y)
+    c.x1, c.y1 = math.max(c.x1, r.position.x), math.max(c.y1, r.position.y)
+  end
+  local patches, seen = {}, {}
+  for key, c in pairs(chunks) do
+    if not seen[key] then
+      local p = {name = c.name, tiles = 0, amount = 0, x0 = c.x0, y0 = c.y0, x1 = c.x1, y1 = c.y1}
+      local todo = {key}
+      seen[key] = true
+      while #todo > 0 do
+        local k = table.remove(todo)
+        local d = chunks[k]
+        p.tiles, p.amount = p.tiles + d.tiles, p.amount + d.amount
+        p.x0, p.y0, p.x1, p.y1 = math.min(p.x0, d.x0), math.min(p.y0, d.y0), math.max(p.x1, d.x1), math.max(p.y1, d.y1)
+        for dx = -1, 1 do for dy = -1, 1 do
+          local n = d.name .. "|" .. (d.cx + dx) .. "|" .. (d.cy + dy)
+          if chunks[n] and not seen[n] then seen[n] = true todo[#todo + 1] = n end
+        end end
+      end
+      p.drills = s.count_entities_filtered{area = {{p.x0, p.y0}, {p.x1 + 1, p.y1 + 1}}, type = "mining-drill", force = "player"}
+      patches[#patches + 1] = p
+    end
+  end
+  table.sort(patches, function(a, b) return a.amount > b.amount end)
+  out{ok = true, did = patches}
+end
+
+function acts.network()
+  local net = builder{A.x, A.y}
+  if not net then return refuse(string.format("no roboport's construction area covers (%.1f, %.1f)%s", A.x, A.y,
+    nearest_roboport{A.x, A.y})) end
+  local items = {}
+  for _, it in pairs(net.get_contents()) do items[it.name] = (items[it.name] or 0) + it.count end
+  out{ok = true, did = {roboports = #net.cells, construction_robots = net.all_construction_robots,
+    construction_idle = net.available_construction_robots, logistic_robots = net.all_logistic_robots, items = items}}
+end
+
+function acts.rate()
+  local st = f.get_item_production_statistics(s)
+  local P = defines.flow_precision_index
+  local res = {}
+  for _, item in pairs(A.items or {}) do
+    if not prototypes.item[item] then return refuse("no item named " .. tostring(item)) end
+    local function flow(cat, idx) return st.get_flow_count{name = item, category = cat, precision_index = idx, count = false} end
+    res[item] = {made_1m = flow("input", P.one_minute), used_1m = flow("output", P.one_minute),
+      made_10m = flow("input", P.ten_minutes), used_10m = flow("output", P.ten_minutes)}
+  end
+  out{ok = true, did = res}
 end
 
 function acts.ghost()
@@ -58,7 +183,7 @@ function acts.ghost()
   if not items or not items[1] then return refuse(A.name .. " has no item that places it") end
   local spec = {name = A.name, position = {A.x, A.y}, direction = dir(A.direction), force = "player",
     build_check_type = defines.build_check_type.manual_ghost}
-  if not s.can_place_entity(spec) then return refuse(string.format("%s does not fit at (%.1f, %.1f)", A.name, A.x, A.y)) end
+  if not s.can_place_entity(spec) then return refuse(blocked_by(proto, spec)) end
   local g = s.create_entity{name = "entity-ghost", inner_name = A.name, position = {A.x, A.y}, direction = dir(A.direction), force = "player"}
   if not g then return refuse("the engine refused the ghost") end
   if A.recipe then

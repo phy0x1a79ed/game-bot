@@ -3,6 +3,7 @@ import argparse
 import json
 import sys
 
+from .acts import VERBS
 from .lab import Lab, LuaError, labs
 
 
@@ -35,7 +36,7 @@ def main(argv=None):
     wt.add_argument("--surface", default="nauvis")
     wt.add_argument("--area", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
     wt.add_argument("-n", type=int, default=15)
-    ac = sub.add_parser("act", help="one safe act: look, ghost, blueprint, remove, cancel, recipe, research")
+    ac = sub.add_parser("act", help="one safe act: " + ", ".join(VERBS))
     ac.add_argument("name")
     ac.add_argument("verb")
     ac.add_argument("args", nargs="*", help="key=value, e.g. name=iron-chest x=-6.5 y=-6.5")

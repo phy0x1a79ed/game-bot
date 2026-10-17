@@ -159,14 +159,14 @@ end
 for _, g in pairs(s.find_entities_filtered{area = filter.area, force = "player", type = {"entity-ghost", "tile-ghost"}}) do
   local items = g.ghost_prototype.items_to_place_this
   if items and items[1] then
-    local net = f.find_logistic_network_by_position(g.position, s)
+    local net = s.find_logistic_networks_by_construction_area(g.position, f)[1]
     want_item(items[1].name, items[1].count or 1, net, g)
   end
 end
 for _, p in pairs(s.find_entities_filtered{area = filter.area, force = "player", type = "item-request-proxy"}) do
   local ok, reqs = pcall(function() return p.item_requests end)
   if ok and reqs then
-    local net = f.find_logistic_network_by_position(p.position, s)
+    local net = s.find_logistic_networks_by_construction_area(p.position, f)[1]
     for _, r in pairs(reqs) do want_item(r.name, r.count, net, p) end
   end
 end

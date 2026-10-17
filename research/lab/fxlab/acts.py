@@ -6,7 +6,7 @@ from pathlib import Path
 from .bench import lua_value
 
 LUA = Path(__file__).resolve().parent / "lua"
-VERBS = ("look", "ghost", "blueprint", "remove", "cancel", "recipe", "research")
+VERBS = ("look", "resources", "network", "rate", "ghost", "blueprint", "remove", "cancel", "recipe", "research")
 
 
 def act(lab, verb, surface="nauvis", **args):
