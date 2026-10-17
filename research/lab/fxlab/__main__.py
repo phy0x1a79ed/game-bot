@@ -1,5 +1,6 @@
-"""fxlab CLI: up, down, ls, lua, advance, save, waits."""
+"""fxlab CLI: up, down, ls, lua, advance, save, waits, act."""
 import argparse
+import json
 import sys
 
 from .lab import Lab, LuaError, labs
@@ -34,6 +35,11 @@ def main(argv=None):
     wt.add_argument("--surface", default="nauvis")
     wt.add_argument("--area", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
     wt.add_argument("-n", type=int, default=15)
+    ac = sub.add_parser("act", help="one safe act: look, ghost, blueprint, remove, cancel, recipe, research")
+    ac.add_argument("name")
+    ac.add_argument("verb")
+    ac.add_argument("args", nargs="*", help="key=value, e.g. name=iron-chest x=-6.5 y=-6.5")
+    ac.add_argument("--surface", default="nauvis")
     a = p.parse_args(argv)
 
     if a.cmd == "up":
@@ -57,6 +63,11 @@ def main(argv=None):
         print(f"{Lab(a.name).advance(a.ticks, a.speed):.1f}s")
     elif a.cmd == "save":
         print(Lab(a.name).save(a.save))
+    elif a.cmd == "act":
+        from . import acts
+        r = acts.act(Lab(a.name), a.verb, a.surface, **acts.parse_args(a.args))
+        print(json.dumps(r, indent=1))
+        sys.exit(0 if r["ok"] else 2)
     elif a.cmd == "waits":
         from . import waits
         area = ((a.area[0], a.area[1]), (a.area[2], a.area[3])) if a.area else None
