@@ -131,6 +131,106 @@ parallel took 2.7 seconds against 6.6 in series.
 
 ## Entries
 
+### 2026-10-17 — lab tools and the first play-level experiments
+
+Headless labs for testing play tools without the realm: `lab/fxlab.sh` and
+the `fxlab` package beside it. A lab is a copy of a realm save, or a new
+world, on the realm image, capped at 2 CPUs and 4 GB. It starts in about 2 s
+and runs the run 4 base at about 800 updates per second. Labs only ever read
+the realm's saves volume.
+
+**Tools** (each held by fixtures in `lab/fxlab/fixtures.py`)
+
+- The balance gate compares the items in the world with the production
+  statistics over a window. It flags a planted insert, a planted delete and
+  Caviar's two audit patterns: clearing a jammed output, sourceless coal.
+- The bench rates any captured blueprint with ports found automatically. The
+  run 4 red/green block rates 63 red and 53 green per minute.
+- `fxlab waits` lists what the factory waits for, per item. It ranks root
+  causes above waits they cause. On the run 4 closeout it names iron-plate
+  first, 43 drills on exhausted ore.
+- `fxlab act` is the safe-act surface: look, resources, network, rate,
+  ghost, ghosts, blueprint, remove, cancel, recipe, research. No act creates
+  an item. A refused act says why and suggests a spot that fits.
+- `python -m fxlab.ratchet` runs all 22 fixtures in parallel labs. It moves
+  `best.json` only when nothing regresses and a score rises.
+- `python -m fxlab.experiment` runs a model in two arms, raw Lua against the
+  tools, each in its own paused lab. It scores each arm against an untouched
+  lab advanced the same game time.
+
+**Engine facts the tools had to learn**
+
+- An output-blocked drill holds one mined item. The statistics count it as
+  made, but no inventory holds it. A short window that starts with blocked
+  drills reads a false surplus.
+- Items inside an entity that enemies destroy vanish with it. The gate
+  excuses them only through the lab mod `fxlab-census`, which records the
+  contents of player entities killed by the enemy force. A script `die()`
+  is not excused.
+- Crafting counts its ingredients as used when a craft starts, and mining
+  productivity output counts as made. Neither one unbalances a window.
+- `find_logistic_network_by_position` uses the logistic area, 25 tiles from a
+  roboport. Robots build in the construction area, 55 tiles. Ask
+  `find_logistic_networks_by_construction_area` whether robots will build a
+  ghost.
+- `can_place_entity` with the manual ghost check passes a rotate or replace
+  over an entity of the same size. A new ghost there then fails. A drill's
+  ghost also needs ore under it, a check `find_non_colliding_position` skips.
+- Claude Code refuses a Bash heredoc that holds a brace next to a quote, such
+  as Lua `{"x"}`. It also refuses chained commands. A raw-Lua agent loses
+  turns to both.
+
+**Measurement**
+
+- **CAUTION** The run 4 closeout as saved is chaotic. One empty chest ghost
+  moved the 10-minute iron-plate score by 7%. Four such nudges spread the
+  60-minute score from 921 to 2037. Battles and train timing amplify any
+  change.
+- With enemies removed (`lab/fxlab/lua/scenario-calm.lua`, the experiment
+  default) the same four nudges read 2029.3 each over 60 minutes. The
+  10-minute floor is 0.3 plates per minute.
+- `fxlab.experiment --noise N` scores N nudged labs. Four nudges can miss the
+  chaotic tail. Use more on any new scenario.
+
+**Experiments** (Sonnet, run 4 closeout, raise iron-plate output, 60 game
+minutes of budget, 80 turns, 10-minute score window)
+
+| Run | Scenario | Raw gain | Tools gain | Raw cost | Tools cost |
+|---|---|---|---|---|---|
+| 1 | as saved | +0.2 | −0.2 | $0.27 | $0.43 |
+| 2 | as saved | −0.5 | −6.0 | $0.27 | $0.40 |
+| 3 | as saved | +240.3, gate failed | +74.0 | $0.53 | $3.30 |
+| 4 | as saved | −4.6 | −26.9 | $0.53 | $0.40 |
+| 5 | calm | −4.0 | −0.2 | $0.35 | $1.06 |
+
+- Gains on runs 1 to 4 sit inside the chaotic spread. Run 3's raw gate
+  failure was the destroyed-contents gap, fixed after it. Only run 5 is a
+  clean comparison, and neither arm moved the score.
+- Most agents named the ore shortage within about 20 calls. None built an
+  outpost on a fresh patch. The patches lie 100 to 250 tiles outside robot
+  coverage, with two roboports in storage. The agents used 0 to 47 of 60 game
+  minutes and stopped.
+- The raw arm twice built sink chests on blocked plate belts. On an
+  ore-limited base a sink moves ore between furnaces and adds nothing. The
+  raw arm also fuelled new furnaces through robot item requests, a hand
+  refuel by another name.
+- Each experiment exposed a tool fault: refusals without a reason, the
+  logistic-area check, flying robots counted as blockers, 300 one-ghost
+  calls, pretty-printed output that grew a 310k-token context. The batch
+  `ghosts` act and one-line output cut the next tools run from 81 turns and
+  $3.30 to 48 turns and $0.40.
+
+**Next**
+
+1. Pick a scenario whose lever a session can reach, such as an ore patch at
+   the edge of robot coverage. Measure its noise floor first.
+2. Score what the factory consumes, such as science, so sinks earn nothing.
+3. Give the tools arm a way to extend coverage: a planned chain of roboports
+   and poles toward a target.
+
+Experiment records live in `~/.cache/fxlab/experiments/<stamp>/`. The child
+agents' transcripts land in `~/.claude/projects/-home-tony--cache-fxlab-*`.
+
 ### 2026-10-03 — run 4 post-mortem: why 16 hours bought so little
 
 A review of the overnight crew run (tick 2.06M to 5.58M, 16.6 wall-hours, six
@@ -206,7 +306,8 @@ test bench: `run4-postmortem-bench`.
   independent islands, city blocks.
 - They make defence cheap early or switch enemies off.
 
-**Suggestions for the next run** (not adopted yet)
+**Suggestions for the next run** (2026-10-17: the lab tools cover items 1, 3
+and 5. See that entry.)
 
 1. Clock the game to decisions. Pause while the agent thinks. Fast-forward
    through waits.
