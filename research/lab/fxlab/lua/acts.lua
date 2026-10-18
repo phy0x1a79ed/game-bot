@@ -6,6 +6,7 @@
 --   network {x, y}                    the robot network that builds at a point: robots, roboports, storage contents
 --   rate {items}                      made and used per minute, over the last minute and the last ten
 --   ghost {name, x, y, direction, recipe}   place one ghost
+--   ghosts {list}                     place many: list of [name, x, y, direction, recipe], each checked like ghost
 --   blueprint {bp, x, y, direction}   place a blueprint string as ghosts
 --   remove {name, x, y}               order deconstruction of the one entity of that name on that tile
 --   cancel {name, x, y}               cancel a deconstruction order the same way
@@ -51,6 +52,26 @@ local function on_tile(name)
   return nil, string.format("no %s covers (%.1f, %.1f)%s", name, A.x, A.y, near and "; nearest is " .. fmt(near) or "")
 end
 
+-- the centre nearest (x, y) on proto's tile grid: odd sizes sit on half tiles, even sizes on tile corners
+local function on_grid(proto, x, y)
+  local b = proto.collision_box
+  local ox = math.ceil(b.right_bottom.x - b.left_top.x) % 2 == 1 and 0.5 or 0
+  local oy = math.ceil(b.right_bottom.y - b.left_top.y) % 2 == 1 and 0.5 or 0
+  return math.floor(x - ox + 0.5) + ox, math.floor(y - oy + 0.5) + oy
+end
+
+-- can_place_entity also passes a rotate or replace over a same-sized entity, which a new ghost cannot do
+local PASSABLE = {resource = true, ["item-entity"] = true, corpse = true}
+local function fits(proto, spec)
+  if not s.can_place_entity(spec) then return false end
+  local b, x, y = proto.collision_box, spec.position[1], spec.position[2]
+  for _, e in pairs(s.find_entities_filtered{area = {{x + b.left_top.x + 0.01, y + b.left_top.y + 0.01},
+      {x + b.right_bottom.x - 0.01, y + b.right_bottom.y - 0.01}}}) do
+    if not PASSABLE[e.type] then return false end
+  end
+  return true
+end
+
 -- why spec does not fit, and the nearest position where it does
 local function blocked_by(proto, spec)
   local b, x, y = proto.collision_box, spec.position[1], spec.position[2]
@@ -73,16 +94,14 @@ local function blocked_by(proto, spec)
   local msg = string.format("%s does not fit at (%.1f, %.1f): %s", spec.name, x, y,
     #parts > 0 and table.concat(parts, ", ") or "blocked by terrain")
   -- nearest fitting position on this entity's grid, ring by ring
-  local ox = math.ceil(b.right_bottom.x - b.left_top.x) % 2 == 1 and 0.5 or 0
-  local oy = math.ceil(b.right_bottom.y - b.left_top.y) % 2 == 1 and 0.5 or 0
-  local cx, cy = math.floor(x - ox + 0.5) + ox, math.floor(y - oy + 0.5) + oy
+  local cx, cy = on_grid(proto, x, y)
   for r = 1, 16 do
     local best, bd
     for dx = -r, r do for dy = -r, r do
       if math.max(math.abs(dx), math.abs(dy)) == r then
         spec.position = {cx + dx, cy + dy}
         local d = dx * dx + dy * dy
-        if (not bd or d < bd) and s.can_place_entity(spec) then best, bd = spec.position, d end
+        if (not bd or d < bd) and fits(proto, spec) then best, bd = spec.position, d end
       end
     end end
     if best then return msg .. string.format("; nearest spot that fits is (%.1f, %.1f)", best[1], best[2]) end
@@ -176,21 +195,42 @@ function acts.rate()
   out{ok = true, did = res}
 end
 
-function acts.ghost()
-  local proto = prototypes.entity[A.name]
-  if not proto then return refuse("no entity named " .. tostring(A.name)) end
+-- place one ghost after the same checks a player's ghost gets; returns ok and what happened or why not
+local function place(name, x, y, direction, recipe)
+  local proto = prototypes.entity[name]
+  if not proto then return false, "no entity named " .. tostring(name) end
   local items = proto.items_to_place_this
-  if not items or not items[1] then return refuse(A.name .. " has no item that places it") end
-  local spec = {name = A.name, position = {A.x, A.y}, direction = dir(A.direction), force = "player",
+  if not items or not items[1] then return false, name .. " has no item that places it" end
+  x, y = on_grid(proto, x, y)
+  local spec = {name = name, position = {x, y}, direction = dir(direction), force = "player",
     build_check_type = defines.build_check_type.manual_ghost}
-  if not s.can_place_entity(spec) then return refuse(blocked_by(proto, spec)) end
-  local g = s.create_entity{name = "entity-ghost", inner_name = A.name, position = {A.x, A.y}, direction = dir(A.direction), force = "player"}
-  if not g then return refuse("the engine refused the ghost") end
-  if A.recipe then
-    local ok, err = pcall(g.set_recipe, A.recipe)
-    if not ok then g.destroy() return refuse("recipe: " .. tostring(err)) end
+  if not fits(proto, spec) then return false, blocked_by(proto, spec) end
+  local g = s.create_entity{name = "entity-ghost", inner_name = name, position = {x, y}, direction = dir(direction), force = "player"}
+  if not g then return false, "the engine refused the ghost" end
+  if recipe then
+    local ok, err = pcall(g.set_recipe, recipe)
+    if not ok then g.destroy() return false, "recipe: " .. tostring(err) end
   end
-  out{ok = true, did = "ghost " .. fmt(g), warn = covered(g.position, items[1].name)}
+  return true, "ghost " .. fmt(g), covered(g.position, items[1].name)
+end
+
+function acts.ghost()
+  local ok, msg, warn = place(A.name, A.x, A.y, A.direction, A.recipe)
+  if not ok then return refuse(msg) end
+  out{ok = true, did = msg, warn = warn}
+end
+
+function acts.ghosts()
+  -- list of [name, x, y, direction, recipe]; each placed or refused on its own
+  local placed, refused, warns = 0, {}, {}
+  for i, g in ipairs(A.list or {}) do
+    local ok, msg, warn = place(g[1], g[2], g[3], g[4], g[5])
+    if ok then placed = placed + 1 else refused[#refused + 1] = i .. ": " .. msg end
+    if warn then warns[warn] = true end
+  end
+  local w = {} for k in pairs(warns) do w[#w + 1] = k end
+  out{ok = #refused == 0, did = string.format("placed %d of %d ghosts", placed, #(A.list or {})),
+    refused = #refused > 0 and refused or nil, warn = #w > 0 and w or nil}
 end
 
 function acts.blueprint()

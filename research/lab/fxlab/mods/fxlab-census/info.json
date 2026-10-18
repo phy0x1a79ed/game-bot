@@ -1,0 +1,9 @@
+{
+  "name": "fxlab-census",
+  "version": "0.1.0",
+  "title": "fxlab census",
+  "author": "game-bot",
+  "description": "Lab-only: records the items each destroyed player entity held, for the balance gate.",
+  "factorio_version": "2.1",
+  "dependencies": ["base"]
+}

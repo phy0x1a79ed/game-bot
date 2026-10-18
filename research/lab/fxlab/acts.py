@@ -6,7 +6,7 @@ from pathlib import Path
 from .bench import lua_value
 
 LUA = Path(__file__).resolve().parent / "lua"
-VERBS = ("look", "resources", "network", "rate", "ghost", "blueprint", "remove", "cancel", "recipe", "research")
+VERBS = ("look", "resources", "network", "rate", "ghost", "ghosts", "blueprint", "remove", "cancel", "recipe", "research")
 
 
 def act(lab, verb, surface="nauvis", **args):
@@ -25,3 +25,15 @@ def parse_args(pairs):
         except ValueError:
             out[k] = v
     return out
+
+
+def render(r):
+    """Compact text for a model to read: one JSON line, or one line per row when `did` is a list of records."""
+    did = r.get("did")
+    if not (isinstance(did, list) and did and isinstance(did[0], dict)):
+        return json.dumps(r, separators=(",", ":"))
+    cols = list(dict.fromkeys(k for row in did for k in row))
+    head = {k: v for k, v in r.items() if k != "did"}
+    lines = [json.dumps({**head, "columns": cols}, separators=(",", ":"))]
+    lines += [json.dumps([row.get(k) for k in cols], separators=(",", ":")) for row in did]
+    return "\n".join(lines)

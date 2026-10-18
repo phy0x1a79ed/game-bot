@@ -62,6 +62,8 @@ ARMS = {
         network x= y=                    the robot network whose robots build at a point: robots, storage contents
         rate items='["iron-plate"]'      made and used per minute, last 1 and 10 minutes
         ghost name= x= y= [direction=north|east|south|west] [recipe=]   place one ghost
+        ghosts list='[["transport-belt",1.5,2.5,"south"],["assembling-machine-2",5.5,2.5,"north","iron-gear-wheel"]]'
+                                         place many ghosts in one call: [name, x, y, direction, recipe]
         blueprint bp= x= y= [direction=]  place a blueprint string as ghosts
         remove name= x= y=               mark the one entity of that name on that tile for deconstruction
         cancel name= x= y=               unmark it
@@ -135,7 +137,9 @@ def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns):
         except ValueError:
             rec["agent"] = {"error": (d / "agent.err").read_text()[-2000:]}
         rec["game_ticks"] = lab.tick() - tick0
-        v = balance.judge(before, balance.snapshot(lab))
+        after = balance.snapshot(lab)
+        (d / "census.json").write_text(json.dumps({"before": before, "after": after}))
+        v = balance.judge(before, after)
         rec["balance"] = {"ok": v.ok, "summary": v.summary(), "created": v.created, "deleted": v.deleted}
         rec["score"] = round(made_per_min(lab, item, window_min * TICKS_PER_MIN), 1)
     finally:

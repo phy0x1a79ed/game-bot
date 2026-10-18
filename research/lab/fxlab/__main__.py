@@ -67,7 +67,7 @@ def main(argv=None):
     elif a.cmd == "act":
         from . import acts
         r = acts.act(Lab(a.name), a.verb, a.surface, **acts.parse_args(a.args))
-        print(json.dumps(r, indent=1))
+        print(acts.render(r))
         sys.exit(0 if r["ok"] else 2)
     elif a.cmd == "waits":
         from . import waits

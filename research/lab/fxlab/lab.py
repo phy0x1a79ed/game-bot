@@ -77,6 +77,7 @@ class Lab:
             "-v", f"{self.output}:/opt/factorio/script-output",
             "-v", f"{HERE / 'rcon_pipe.py'}:/fxlab/rcon_pipe.py:ro",
             "-v", f"{REALM_APPLIANCE / 'mods/game-bot-control'}:/opt/factorio/mods/game-bot-control:ro",
+            "-v", f"{HERE / 'mods/fxlab-census'}:/opt/factorio/mods/fxlab-census:ro",
             "-v", f"{HERE / 'server-settings.json'}:/fxlab/server-settings.json:ro",
             "-v", f"{HERE / 'map-gen-settings.json'}:/fxlab/map-gen-settings.json:ro",
         ]

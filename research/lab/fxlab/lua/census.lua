@@ -1,7 +1,8 @@
 -- census.lua: every item that exists in the world, by name, plus the player force's lifetime item statistics.
 -- Placed entities and placed tiles count as the item that places them. Quality is folded into the name.
 -- Statistics skip hidden items: "science" counts research progress and never exists in the world.
--- Prints JSON: {tick, world, made, used (item = n), lost (entity = n), placers (entity = item), spent (items used up in use)}
+-- Prints JSON: {tick, world, made, used (item = n), lost (entity = n), placers (entity = item), spent (items used up in use),
+--   died (item = n held by destroyed entities)}
 local world, made, used, lost = {}, {}, {}, {}
 local function add(t, name, n) if n ~= 0 then t[name] = (t[name] or 0) + n end end
 local function add_contents(list) for _, it in pairs(list) do add(world, it.name, it.count) end end
@@ -69,5 +70,7 @@ for name in pairs(lost) do placers[name] = prototypes.entity[name] and item_of(p
 -- ammo fired, repair packs worn and capsules thrown leave the world without passing through the statistics
 local spent_types = {ammo = true, ["repair-tool"] = true, capsule = true}
 for name in pairs(world) do if spent_types[prototypes.item[name].type] then spent[name] = true end end
+-- contents of player entities enemies destroyed, recorded by the lab's fxlab-census mod
+local died = remote.interfaces.fxlab and remote.call("fxlab", "died") or {}
 rcon.print(helpers.table_to_json{tick = game.tick, world = world, made = made, used = used, lost = lost,
-  placers = placers, spent = spent})
+  placers = placers, spent = spent, died = died})

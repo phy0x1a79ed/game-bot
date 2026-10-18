@@ -103,6 +103,16 @@ def balance_planted_fuel(lab):
     return Result(not v.ok and int(n) == 20 and near(v.created.get("coal", 0), 20), v.summary())
 
 
+@fixture(tags={"balance"})
+def balance_enemy_kill_contents(lab):
+    """Contents vanish with a chest that enemies destroy: excused. The same chest killed by script is not."""
+    mini_factory(lab)
+    kill = FX + 's.find_entities_filtered{name = "iron-chest", position = {6.5, 6.5}}[1].die(%s)'
+    by_enemy, _ = windowed(lab, kill % '"enemy"', ticks=3600)
+    by_script, _ = windowed(lab, kill.replace("6.5, 6.5", "-0.5, -6.5") % "", ticks=3600)
+    return Result(by_enemy.ok and not by_script.ok, f"enemy: {by_enemy.summary()}; script: {by_script.summary()}")
+
+
 @fixture(source="run4-closeout", tags={"balance", "slow"})
 def balance_run4_untouched(lab):
     """A real base with enemies, turrets and robots: an untouched window must pass."""
@@ -264,3 +274,17 @@ def acts_construction_reach(lab):
     outside = acts.act(lab, "network", "fx", x=90, y=-10)
     ok = inside["ok"] and ghost["ok"] and not ghost.get("warn") and not outside["ok"] and "nearest roboport" in outside["refused"]
     return Result(ok, f"30 tiles: {inside['ok']}, ghost warn {ghost.get('warn')}; 80 tiles: {outside.get('refused')}")
+
+
+@fixture(tags={"acts"})
+def acts_ghosts_batch(lab):
+    """A batch places what fits, names what does not, and robots build the placed ghosts."""
+    from . import acts
+    mini_factory(lab)
+    r = acts.act(lab, "ghosts", "fx", list=[["transport-belt", 5.5, -17.5, "east"], ["transport-belt", 6.5, -17.5, "east"],
+                                            ["transport-belt", 7.5, -17.5, "east"], ["transport-belt", -6.5, -6.5, "east"]])
+    lab.advance(3600)
+    built = acts.act(lab, "look", "fx", x0=5, y0=-18, x1=8, y1=-17)["did"]
+    ok = (r["did"] == "placed 3 of 4 ghosts" and len(r.get("refused", [])) == 1 and "iron-chest" in r["refused"][0]
+          and [e["name"] for e in built] == ["transport-belt"] * 3)
+    return Result(ok, f"{r['did']}; {r.get('refused')}; built {len(built)}")
