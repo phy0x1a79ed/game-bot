@@ -4,10 +4,15 @@ Each arm gets its own lab and a scratch directory holding `fx`, the only command
 stays paused except under `fx advance`, which stops at the game-time budget. The score is what the factory
 makes of the target item per minute over a fixed window after the agent stops, against an untouched copy of
 the save advanced by the same game time. The balance gate runs over the whole session.
+
+A scenario prepares each lab after it loads. The default, calm, removes enemies: on run 4 with enemies, one
+empty chest ghost moved the 10-minute score by 7% and the 60-minute score by half, because battles and
+trains amplify any perturbation. `--noise N` measures a scenario's floor before its scores are trusted.
 """
 
 import argparse
 import json
+import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -20,10 +25,12 @@ HERE = Path(__file__).resolve().parent
 FXLAB = HERE.parent / "fxlab.sh"
 EXPERIMENTS = ROOT / "experiments"
 TICKS_PER_MIN = 3600
+SCENARIOS = {"calm": HERE / "lua" / "scenario-calm.lua", "as-saved": None}
 
 COMMON = """\
 You are playing Factorio 2.1 (base game, no Space Age content) on a headless server, through the `./fx` \
-command. There is no player character. The factory is a mid-game base with a construction-robot network.
+command. There is no player character. The factory is a mid-game base with a construction-robot network. \
+Enemies are switched off.
 
 Goal: raise the factory's sustained {item} output, measured as {item} made per minute.
 
@@ -105,7 +112,13 @@ def made_per_min(lab, item, ticks):
     return (float(lab.lua(q)) - first) / ((lab.tick() - t0) / TICKS_PER_MIN)
 
 
-def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns):
+def start(lab, save, scenario):
+    lab.up(save=save)
+    if SCENARIOS[scenario]:
+        lab.lua_file(SCENARIOS[scenario])
+
+
+def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns, scenario="calm"):
     d = out / arm
     d.mkdir(parents=True)
     lab = Lab(f"ex-{out.name[-6:]}-{arm}")
@@ -114,10 +127,10 @@ def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns):
     (d / "fx").chmod(0o755)
     prompt = ARMS[arm].format(item=item, budget=budget_min, window=window_min)
     (d / "prompt.txt").write_text(prompt)
-    rec = {"arm": arm, "model": model, "save": save, "item": item, "budget_min": budget_min,
+    rec = {"arm": arm, "model": model, "save": save, "scenario": scenario, "item": item, "budget_min": budget_min,
            "clock": "paused except under fx advance"}
     try:
-        lab.up(save=save)
+        start(lab, save, scenario)
         before = balance.snapshot(lab)
         tick0 = lab.tick()
         t0 = time.time()
@@ -148,15 +161,42 @@ def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns):
     return rec
 
 
-def run_baseline(out, save, item, ticks, window_min):
-    lab = Lab(f"ex-{out.name[-6:]}-base{ticks // TICKS_PER_MIN}")
+def run_baseline(out, save, item, ticks, window_min, scenario="calm"):
+    lab = Lab(f"ex-{out.name[-6:]}-base{ticks}")
     try:
-        lab.up(save=save)
+        start(lab, save, scenario)
         if ticks:
             lab.advance(ticks)
         return round(made_per_min(lab, item, window_min * TICKS_PER_MIN), 1)
     finally:
         lab.down()
+
+
+def nudge(lab, i):
+    """The smallest real change: one iron-chest ghost beside the i-th roboport, for robots to build."""
+    from . import acts
+    xy = lab.lua('local r = game.surfaces.nauvis.find_entities_filtered{type = "roboport", force = "player"} '
+                 f'local e = r[{i} % #r + 1] rcon.print(e.position.x .. " " .. e.position.y)').split()
+    hint = acts.act(lab, "ghost", name="iron-chest", x=float(xy[0]), y=float(xy[1])).get("refused", "")
+    m = re.search(r"fits is \((-?[\d.]+), (-?[\d.]+)\)", hint)
+    return bool(m) and acts.act(lab, "ghost", name="iron-chest", x=float(m[1]), y=float(m[2]))["ok"]
+
+
+def noise(save, item, window_min, n, scenario, ticks=8400):
+    """Score n labs that each differ by one nudge: the spread is the floor a gain must clear."""
+    def one(i):
+        lab = Lab(f"noise-{i}")
+        try:
+            start(lab, save, scenario)
+            nudged = nudge(lab, 7 * i)
+            lab.advance(ticks)
+            return round(made_per_min(lab, item, window_min * TICKS_PER_MIN), 1), nudged
+        finally:
+            lab.down()
+    with ThreadPoolExecutor(max_workers=min(n, 4)) as pool:
+        runs = list(pool.map(one, range(n)))
+    scores = [s for s, _ in runs]
+    return {"scores": scores, "nudged": [k for _, k in runs], "spread": round(max(scores) - min(scores), 1)}
 
 
 def main(argv=None):
@@ -168,15 +208,20 @@ def main(argv=None):
     p.add_argument("--window", type=int, default=10, help="game minutes the score is measured over")
     p.add_argument("--model", default="sonnet")
     p.add_argument("--max-turns", type=int, default=80)
+    p.add_argument("--scenario", choices=list(SCENARIOS), default="calm")
+    p.add_argument("--noise", type=int, metavar="N", help="only measure the scenario's noise floor over N labs")
     a = p.parse_args(argv)
+    if a.noise:
+        print(json.dumps(noise(a.save, a.item, a.window, a.noise, a.scenario)))
+        return
     out = EXPERIMENTS / time.strftime("%Y%m%d-%H%M%S")
     out.mkdir(parents=True)
     with ThreadPoolExecutor(max_workers=len(a.arms)) as pool:
         recs = list(pool.map(lambda arm: run_arm(arm, out, a.save, a.item, a.budget, a.window, a.model,
-                                                 a.max_turns), a.arms))
+                                                 a.max_turns, a.scenario), a.arms))
     ticks = sorted({r.get("game_ticks", 0) for r in recs})
     with ThreadPoolExecutor(max_workers=len(ticks)) as pool:
-        base = dict(zip(ticks, pool.map(lambda t: run_baseline(out, a.save, a.item, t, a.window), ticks)))
+        base = dict(zip(ticks, pool.map(lambda t: run_baseline(out, a.save, a.item, t, a.window, a.scenario), ticks)))
     for r in recs:
         r["baseline"] = base[r.get("game_ticks", 0)]
         r["gain"] = round(r["score"] - r["baseline"], 1) if "score" in r else None

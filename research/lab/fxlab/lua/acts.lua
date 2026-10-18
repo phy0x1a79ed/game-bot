@@ -61,7 +61,8 @@ local function on_grid(proto, x, y)
 end
 
 -- can_place_entity also passes a rotate or replace over a same-sized entity, which a new ghost cannot do
-local PASSABLE = {resource = true, ["item-entity"] = true, corpse = true}
+local PASSABLE = {resource = true, ["item-entity"] = true, corpse = true, ["construction-robot"] = true,
+  ["logistic-robot"] = true, ["combat-robot"] = true, character = true, unit = true}
 local function fits(proto, spec)
   if not s.can_place_entity(spec) then return false end
   local b, x, y = proto.collision_box, spec.position[1], spec.position[2]
