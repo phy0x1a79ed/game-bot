@@ -82,7 +82,7 @@ Every god call records what it did with `sbx.ledger_add(name, entry)`. `entry.ki
 - `research`: `tech`, `before = {researched, level}`, `after`.
 - `body`: `entity`, `before = {reach, build, mine, destructible}`.
 
-`sbx_mode{name, mode = "standard", research = "copy" | "keep"}` walks the ledger backwards and undoes each entry. It skips an entity that is no longer valid. In standard mode every god verb fails with `standard_mode`, and reads still work. `sbx_mode{name, mode = "god"}` enables god verbs again. The ledger keeps growing across switches.
+`sbx_mode{name, mode = "standard", research = "copy" | "keep"}` walks the ledger backwards and undoes each entry. It skips an entity that is no longer valid. In standard mode every god verb fails with `standard_mode`, and reads still work. `sbx_mode{name, mode = "god"}` enables god verbs again. The ledger keeps growing across switches: an undone entry stays, flagged `undone`, so a second switch skips it. `research = "copy"` always ends with `copy_from(player)`, because standard rules mean the player's research. `slice_reset` prunes entity entries whose entity is gone.
 
 ### Slicing (`slice.lua`, fxlab-slice)
 
@@ -90,19 +90,21 @@ The slice is cloned to the same coordinates on the sandbox surface, so positions
 
 | Verb | Args | Returns |
 |---|---|---|
-| `slice_build` | `name`, `area = {{x0, y0}, {x1, y1}}`, `source = "nauvis"`, `research` | `sandbox`, `area`, `entities`, `ports`, `unhandled`, `rails`, `ms` (per phase) |
+| `slice_build` | `name`, `area = {{x0, y0}, {x1, y1}}`, `source = "nauvis"`, `research` | `sandbox`, `area`, `entities`, `ports`, `unhandled`, `rails` (those near the edge), `rail_count` |
 | `slice_inplace` | `name`, `area`, `source = "nauvis"` | the same shape, for the in-place arm on the source surface |
-| `slice_reset` | `name`, `trains_auto = true` | `ms`, `entities` |
+| `slice_reset` | `name`, `trains_auto = true` | `entities` |
+| `slice_timing` | | the last slice verb's phase timings, in ms |
 | `slice_reset_at` | `name`, `tick` | |
 | `slice_drop` | `name` | |
 | `slice_list` | | `slices`: name, area, entities, ports, unhandled counts |
 | `slice_ports` | `name` | `ports`, `unhandled`, `rails` in full |
 | `slice_area_of_base` | `surface = "nauvis"`, `force = "player"`, `pad = 32` | `area` |
-| `slice_fingerprint` | `name`, `which = "play" \| "snapshot" \| "source"`, `detail = false` | `digest`, `entities`, and with `detail` the per-entity records |
+| `slice_fingerprint` | `name`, `which = "play" \| "snapshot" \| "source"`, `detail = false`, or `area` and `surface` instead of `name` | `digest`, `entities`, and with `detail` the per-entity records |
 
-`slice_fingerprint` hashes the slice's entities in a fixed order, excluding port closers: name, position, direction, inventories, belt line items, crafting progress, inserter hand, and fluids rounded to 1e-6. `snapshot` is the record taken at `slice_build`. Fidelity F3 compares `play` after `slice_reset` with `snapshot`.
+`slice_fingerprint` hashes the slice's entities in a fixed order, excluding port closers: name, position, direction, inventories, belt line items, crafting progress, inserter hand, and fluids rounded to 1e-6. `snapshot` is the record taken on the play surface right after `slice_build`, because a force change empties fluids and the snapshot surface's own fluids never match. Fidelity F3 compares `play` after `slice_reset` with `snapshot`.
 
-- A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`. An unhandled port is `{position, name, reason}`.
+- A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`, plus `how`, `tee`, `load`, `starved` and `scripted` that say how it is closed. An unhandled port is `{position, name, reason}`.
+- A `LuaProfiler` cannot be read as a number inside the game, so no reply carries timings. Call `slice_timing` after the verb, or use `fixtures.slice.timed(lab, verb, **args)`, which does both.
 - `slice_inplace` cuts the rectangle out of its surroundings on the source surface: it removes each connection that crosses the edge, places the same closers as `slice_build` and an electric energy interface for power, and records every removed entity so `slice_drop` restores it.
 - `slice_reset` on a standard-mode sandbox restores the snapshot without port closers.
 - A slice with unhandled ports stays playable. The bench refuses to rate it with `unhandled_ports`.
@@ -119,9 +121,9 @@ Each verb takes `name`, the sandbox.
 | `evo` | `set` | evolution factor of the sandbox surface |
 | `nest` | `at`, `names`, `evo` | unit numbers |
 | `wave` | `from`, `target`, `units = {name = count}`, `radius` | `group` |
-| `wave_status` | `group` | alive, killed, state (a read) |
+| `wave_status` | `group` or `name` | alive, killed, state (a read) |
 | `body` | `at`, `reach = 1000`, `invulnerable = true` | unit number |
-| `body_tp` | `at`, `surface` | |
+| `body_tp` | `at`, `surface`, `unit` (default: the newest body) | |
 | `sbx_mode` | `mode`, `research` | counts undone and skipped |
 | `ledger` | | the entries (a read) |
 
@@ -132,14 +134,15 @@ Each verb takes `name`, the sandbox.
 | Verb | Args | Returns |
 |---|---|---|
 | `view_booth` | `player` | parks the camera player on the `cam-booth` surface |
-| `view_shot` | `surface`, `area` or `position` with `resolution`, `zoom`, `info`, `path` | `path` under `script-output` |
+| `view_shot` | `surface`, `area` or `position` with `resolution`, `zoom`, `info`, `path` | `path` under `script-output`, `resolution`, `position` |
 
 `fxlab-render` may append verbs such as `view_stamp` for blueprints.
 
 ### Camera (`camera.py`, fxlab-cam)
 
 - `attach(lab)` and `detach(lab, missing_ok=False)`. `Lab.up(camera=True)` and `Lab.down` call them. The camera container is `<lab container>-cam` with labels `fxlab=1` and `fxlab.role=camera`. The lease does not count it.
-- `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG under the lab's `script-output`, returned once the file stops growing.
+- `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG under the lab's `script-output`, returned once the file stops growing. `frame(area, zoom)` gives the position and pixel size `render` will use.
+- A fixture that needs the seeded save takes `source = "run4-closeout"`, takes that lab down, and brings it up again on `run4-closeout+cam`. It holds one lease slot at a time.
 - `seed(save) -> str`: writes `<save>+cam` into `~/.cache/fxlab/_saves/`, with the camera player already in the save and parked in its booth. Start every arm of a fidelity comparison from the seeded save.
 - CLI: `fxlab.sh seed-camera <save>` and `fxlab.sh shot <lab> ...`, registered through `camera.register(sub)`.
 
@@ -175,6 +178,8 @@ Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and 
 | `tool_list` | | `tools`: name, kind, effect, summary, size, calls, errors, last_error, defined |
 | `tool_drop` | `name` | |
 
+Check the mod version with `script.active_mods["game-bot-control"]`. A mod without a data stage never appears in the server log's "Loading mod" lines.
+
 - Tools live in `storage.tools`, apart from the stored scripts, so the script LRU never evicts them. The cap is 256 tools.
 - A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts.
 - `tool_call` counts calls and errors per tool.
@@ -183,10 +188,10 @@ Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and 
 ### Realm verbs (rlm-factorio-lab)
 
 - `session_id = "lab:<container>"` addresses a lab, for example `lab:fxlab-hub-trial`. The service refuses a container without the label `fxlab=1`. Seat verbs on a lab fail with "no seat in a lab".
-- `tool{name, args}`, `tool_list{}` and `tool_sync{names}` need mod 0.6. `tool_sync` reads `RLM_FACTORIO_TOOLS`, by default `~/agentic_workspace/projects/game-bot/factorio/research/tools`.
+- `tool{name, args}`, `tool_list{}` and `tool_sync{names}` need mod 0.6. `tool_sync` reads `RLM_FACTORIO_TOOLS`, by default `~/agentic_workspace/projects/game-bot/factorio/research/tools`, the checkout the deploy updates. An empty `tools` list arrives as a list.
 - `sbx{verb, args}` forwards to the lab mod and works on lab targets only.
-- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build_mode = built`, every god verb of `sbx` and every tool with `effect = cheat`. The refusal names the rule.
-- The admin override is an `admin_token` argument that matches `~/.config/rlm-factorio/admin-token`. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
+- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build = true` or `build_mode = "built"`, the `sbx` god verbs (`research`, `items`, `evo`, `nest`, `wave`, `body`, `body_tp`, and `sbx_mode` with `mode = "god"`) and every tool with `effect = cheat`. The refusal names the rule.
+- The admin override is an `admin_token` argument that matches `RLM_FACTORIO_ADMIN_TOKEN_FILE`, by default `~/.config/rlm-factorio/admin-token`. It lifts every realm-rules refusal. A missing file means no override. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
 - `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
 
 ## Fixtures
