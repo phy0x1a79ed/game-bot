@@ -98,6 +98,9 @@ The slice is cloned to the same coordinates on the sandbox surface, so positions
 | `slice_list` | | `slices`: name, area, entities, ports, unhandled counts |
 | `slice_ports` | `name` | `ports`, `unhandled`, `rails` in full |
 | `slice_area_of_base` | `surface = "nauvis"`, `force = "player"`, `pad = 32` | `area` |
+| `slice_fingerprint` | `name`, `which = "play" \| "snapshot" \| "source"`, `detail = false` | `digest`, `entities`, and with `detail` the per-entity records |
+
+`slice_fingerprint` hashes the slice's entities in a fixed order, excluding port closers: name, position, direction, inventories, belt line items, crafting progress, inserter hand, and fluids rounded to 1e-6. `snapshot` is the record taken at `slice_build`. Fidelity F3 compares `play` after `slice_reset` with `snapshot`.
 
 - A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`. An unhandled port is `{position, name, reason}`.
 - `slice_inplace` cuts the rectangle out of its surroundings on the source surface: it removes each connection that crosses the edge, places the same closers as `slice_build` and an electric energy interface for power, and records every removed entity so `slice_drop` restores it.
@@ -132,6 +135,13 @@ Each verb takes `name`, the sandbox.
 | `view_shot` | `surface`, `area` or `position` with `resolution`, `zoom`, `info`, `path` | `path` under `script-output` |
 
 `fxlab-render` may append verbs such as `view_stamp` for blueprints.
+
+### Camera (`camera.py`, fxlab-cam)
+
+- `attach(lab)` and `detach(lab, missing_ok=False)`. `Lab.up(camera=True)` and `Lab.down` call them. The camera container is `<lab container>-cam` with labels `fxlab=1` and `fxlab.role=camera`. The lease does not count it.
+- `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG under the lab's `script-output`, returned once the file stops growing.
+- `seed(save) -> str`: writes `<save>+cam` into `~/.cache/fxlab/_saves/`, with the camera player already in the save and parked in its booth. Start every arm of a fidelity comparison from the seeded save.
+- CLI: `fxlab.sh seed-camera <save>` and `fxlab.sh shot <lab> ...`, registered through `camera.register(sub)`.
 
 ## Tools
 
@@ -177,7 +187,7 @@ Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and 
 - `sbx{verb, args}` forwards to the lab mod and works on lab targets only.
 - Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build_mode = built`, every god verb of `sbx` and every tool with `effect = cheat`. The refusal names the rule.
 - The admin override is an `admin_token` argument that matches `~/.config/rlm-factorio/admin-token`. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
-- `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The toolsmith team mines this log.
+- `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
 
 ## Fixtures
 
