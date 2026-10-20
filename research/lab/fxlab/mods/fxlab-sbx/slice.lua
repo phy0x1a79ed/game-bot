@@ -1005,6 +1005,205 @@ M.on_tick = function(ev)
   end
 end
 
+-- In-place arm ----------------------------------------------------------------------------------------------------
+-- The same cut on the source surface itself: what connects into the rectangle from outside moves to a stash surface,
+-- the closers go where it stood, the copper wires that cross the edge come off, and `slice_drop` puts it all back.
+
+local function ekey(e) return {n = e.name, x = e.position.x, y = e.position.y} end
+local function efind(s, k) return s.find_entity(k.n, {k.x, k.y}) end
+
+-- every wire of `e` as {a, aid, b, bid, origin}, once per pair
+local function wires_of(e, out, seen)
+  local conns = e.get_wire_connectors(false)
+  if not conns then return end
+  for _, c in pairs(conns) do
+    for _, w in ipairs(c.connections) do
+      local o = w.target.owner
+      if o and o.valid and o.type ~= "entity-ghost" then
+        local a, b = ekey(e), ekey(o)
+        local ka = a.n .. "@" .. a.x .. "," .. a.y .. ":" .. c.wire_connector_id
+        local kb = b.n .. "@" .. b.x .. "," .. b.y .. ":" .. w.target.wire_connector_id
+        local key = ka < kb and (ka .. "|" .. kb) or (kb .. "|" .. ka)
+        if not seen[key] then
+          seen[key] = true
+          out[#out + 1] = {a = a, aid = c.wire_connector_id, b = b, bid = w.target.wire_connector_id, origin = w.origin}
+        end
+      end
+    end
+  end
+end
+
+local function rewire(s, list)
+  for _, w in ipairs(list) do
+    local ea, eb = efind(s, w.a), efind(s, w.b)
+    if ea and eb then
+      local ca, cb = ea.get_wire_connector(w.aid, true), eb.get_wire_connector(w.bid, true)
+      if ca and cb then ca.connect_to(cb, false, w.origin) end
+    end
+  end
+end
+
+local function supply_overlaps(pole, area)
+  local d = pole.prototype.get_supply_area_distance()
+  local p = pole.position
+  return p.x + d > area[1][1] and p.x - d < area[2][1] and p.y + d > area[1][2] and p.y - d < area[2][2]
+end
+
+-- one energy interface on each electric network of the rectangle, placed inside a pole's supply area
+local function power_inplace(name, S, s, force, area, inside)
+  local made, done = {}, {}
+  for _, pole in pairs(s.find_entities_filtered{area = area, type = "electric-pole"}) do
+    local id = pole.electric_network_id
+    if inside[pole.unit_number] and id and not done[id] then
+      local d = pole.prototype.get_supply_area_distance()
+      local p = s.find_non_colliding_position("electric-energy-interface", pole.position, d + 1, 0.5)
+      local eei = p and s.create_entity{name = "electric-energy-interface", position = p, force = force}
+      if eei then
+        if eei.is_connected_to_electric_network() then
+          eei.power_production = 1e10
+          eei.electric_buffer_size = 1e11
+          eei.energy = 1e11
+          S.closer_ids[eei.unit_number] = true
+          S.closer_ents[#S.closer_ents + 1] = eei
+          sbx.ledger_add(name, {kind = "entity", entity = eei})
+          made[#made + 1] = {kind = "power", role = "feed", position = pos2(p), closer = eei.unit_number}
+          done[id] = true
+        else
+          eei.destroy()
+        end
+      end
+    end
+  end
+  return made
+end
+
+M.remote.slice_inplace = function(a)
+  local area = rect(a.area)
+  local source = a.source or "nauvis"
+  local src = game.surfaces[source]
+  if not src then sbx.fail("bad_args", "no surface " .. tostring(source)) end
+  local name = a.name
+  laps_begin()
+  lap("gen")
+  local box = sbx.new{name = name, inplace = {surface = source, force = "player"}}
+  local S = {area = area, big = pad(area, BIG_PAD), source = source, inplace = true, tick = game.tick,
+             closer_ids = {}, closer_ents = {}, feeds = {}, drains = {}, ports = {}, unhandled = {}, stash = {}, wires = {}}
+  state()[name] = S
+  local ok, err = pcall(function()
+    local inside = {}
+    for _, e in pairs(src.find_entities_filtered{area = area}) do
+      if e.unit_number then inside[e.unit_number] = true end
+    end
+    lap("ports")
+    local ports, unhandled, rails, rail_count, outers = find_ports(src, area, inside)
+    S.ports_data, S.unhandled_find, S.rails, S.rail_count = ports, unhandled, rails, rail_count
+
+    local stash, seen = {}, {}
+    local function take(e)
+      if e and e.valid and e.unit_number and not inside[e.unit_number] and not seen[e.unit_number]
+         and e.type ~= "character" then
+        seen[e.unit_number] = true
+        stash[#stash + 1] = e
+      end
+    end
+    for _, list in pairs(outers) do for _, e in pairs(list) do take(e) end end
+    for _, ins in pairs(src.find_entities_filtered{area = pad(area, 4), type = "inserter"}) do
+      if not inside[ins.unit_number] and (inrect(area, ins.pickup_position) or inrect(area, ins.drop_position)) then take(ins) end
+    end
+    for _, pole in pairs(src.find_entities_filtered{area = pad(area, 12), type = "electric-pole"}) do
+      if not inside[pole.unit_number] then
+        local linked = false
+        local c = pole.get_wire_connector(defines.wire_connector_id.pole_copper, false)
+        if c then
+          for _, w in ipairs(c.connections) do
+            local o = w.target.owner
+            if o and o.valid and o.unit_number and inside[o.unit_number] then linked = true end
+          end
+        end
+        if linked or supply_overlaps(pole, area) then take(pole) end
+      end
+    end
+
+    lap("wires")
+    local seen_w = {}
+    for _, e in ipairs(stash) do wires_of(e, S.wires, seen_w) end
+    for _, pole in pairs(src.find_entities_filtered{area = area, type = "electric-pole"}) do
+      local c = pole.get_wire_connector(defines.wire_connector_id.pole_copper, false)
+      if c then
+        for _, w in ipairs(c.connections) do
+          local o = w.target.owner
+          if o and o.valid and o.unit_number and not inside[o.unit_number] and not seen[o.unit_number] then
+            local before = #S.wires
+            wires_of(pole, S.wires, seen_w)
+            c.disconnect_from(w.target, w.origin)
+          end
+        end
+      end
+    end
+
+    lap("stash")
+    S.pre = record(src, pad(area, 24))
+    local stash_s = new_surface("fxlab-stash-" .. name)
+    for _, f in pairs(game.forces) do f.set_surface_hidden(stash_s, true) end
+    local rect_stash = pad(area, 24)
+    for _, e in ipairs(stash) do
+      local p = e.position
+      chunks_ready(stash_s, {{p.x - 8, p.y - 8}, {p.x + 8, p.y + 8}})
+    end
+    if #stash > 0 then
+      src.clone_entities{entities = stash, destination_surface = stash_s, destination_offset = {0, 0}}
+    end
+    S.stash_rec = record(stash_s, rect_stash)
+    S.stash_area = rect_stash
+    for _, e in ipairs(stash) do e.destroy() end
+    S.stashed = #stash
+
+    lap("close")
+    local done, refused = close_all(name, S, src, game.forces.player, ports)
+    S.ports = strip(done)
+    S.unhandled = {}
+    for _, u in ipairs(unhandled) do S.unhandled[#S.unhandled + 1] = u end
+    for _, u in ipairs(refused) do S.unhandled[#S.unhandled + 1] = u end
+    for _, pw in ipairs(power_inplace(name, S, src, game.forces.player, area, inside)) do S.ports[#S.ports + 1] = pw end
+    S.entities = src.count_entities_filtered{area = area}
+    lap(nil)
+  end)
+  if not ok then
+    lap(nil)
+    pcall(M.inplace_drop, name, S)
+    pcall(sbx.drop, name)
+    state()[name] = nil
+    error(err, 0)
+  end
+  local out = summary(S)
+  out.stashed = S.stashed
+  return out
+end
+
+-- Undo an in-place cut: closers out, stash back, wires back.
+function M.inplace_drop(name, S)
+  local src = game.surfaces[S.source]
+  destroy_closers(S)
+  local stash_s = game.surfaces["fxlab-stash-" .. name]
+  if stash_s then
+    local list = stash_s.find_entities_filtered{}
+    if #list > 0 then
+      stash_s.clone_entities{entities = list, destination_surface = src, destination_offset = {0, 0}}
+    end
+  end
+  rewire(src, S.wires or {})
+  if S.stash_rec then
+    restore_belts(src, S.stash_rec)
+  end
+  -- nothing has run since the cut: put every belt and fluid back exactly
+  if S.pre and game.tick == S.tick then
+    restore_fluids(src, S.pre)
+    restore_segments(src, S.pre)
+    restore_belts(src, S.pre)
+  end
+  if stash_s then game.delete_surface(stash_s) end
+end
+
 M.remote.slice_ports = function(a)
   local S = state()[a.name]
   if not S then sbx.fail("not_found", "no slice " .. tostring(a.name)) end
