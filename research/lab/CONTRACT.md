@@ -164,17 +164,19 @@ The file starts with `--- key: value` lines. The first other line ends the heade
 
 - `read` changes nothing. `act` changes the world as a player could: ghosts, deconstruction orders, recipes, filters. `cheat` does anything a player cannot, such as `create_entity` of a built entity or inserting items from nothing. The realm refuses `cheat` tools for crew roles.
 - A `call` tool is a function body. Its arguments arrive as `...` (`local args = ...`). It returns one table, never printed text.
-- A `lib` tool runs once per peer and returns a table of functions. Another tool gets it with `use("name")`. **WARNING** A lib body must not write `storage` or change the game, because each peer runs it at a different moment. `tool_define` refuses a lib whose body writes `storage`.
+- A `lib` tool returns a table of functions. Another tool gets it with `use("name")`. A peer caches a lib for one tick only, so every peer runs lib bodies at the same tick and no lib keeps state across ticks. **WARNING** A lib body must not change the game. It sees `storage` write-blocked. The guard stops accidents only: `remote.call` can still reach the game.
+- In a tool, `_G` is the tool's own env and `getmetatable(_ENV)` is hidden, so no tool reaches the mod's real `storage`.
 - A tool may not register event handlers.
 
-### Game verbs (game-bot-control 0.6, rlm-factorio)
+### Game verbs (game-bot-control 0.6.1, rlm-factorio)
 
 Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and on the realm.
 
 | Verb | Args | Returns |
 |---|---|---|
 | `tool_define` | `name`, `code`, `kind`, `effect`, `summary` | `name`, `size`. Raises on a bad name, a compile error or a lib that writes `storage` |
-| `tool_call` | `name`, `args` | `{ok = true, r = <value>}` or `{ok = false, error = "no_tool" \| "tool_error", detail}` |
+| `tool_call` | `name`, `args`, `deny` (a list of effects) | `{ok = true, r = <value>}` or `{ok = false, error = "no_tool" \| "tool_error" \| "denied", detail}` |
+| `blueprint_stamp` | without `seat`: `surface`, `force = "player"` and the usual args | as with a seat |
 | `tool_list` | | `tools`: name, kind, effect, summary, size, calls, errors, last_error, defined |
 | `tool_drop` | `name` | |
 
@@ -182,7 +184,7 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 
 - Tools live in `storage.tools`, apart from the stored scripts, so the script LRU never evicts them. The cap is 256 tools.
 - A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts.
-- `tool_call` counts calls and errors per tool.
+- `tool_call` counts calls and errors per tool. `deny` covers the tool, every lib it uses and every tool it calls through `remote.call`, for the whole call. A nested call can widen `deny` but never narrow it. A denied call counts as neither a call nor an error.
 - From Python: `fxlab.tools.sync(lab)`, `fxlab.tools.call(lab, name, **args)`, `fxlab.tools.listing(lab)`. From the shell: `fxlab.sh tool-sync <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
 
 ### Realm verbs (rlm-factorio-lab)
@@ -190,7 +192,9 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 - `session_id = "lab:<container>"` addresses a lab, for example `lab:fxlab-hub-trial`. The service refuses a container without the label `fxlab=1`. Seat verbs on a lab fail with "no seat in a lab".
 - `tool{name, args}`, `tool_list{}` and `tool_sync{names}` need mod 0.6. `tool_sync` reads `RLM_FACTORIO_TOOLS`, by default `~/agentic_workspace/projects/game-bot/factorio/research/tools`, the checkout the deploy updates. An empty `tools` list arrives as a list.
 - `sbx{verb, args}` forwards to the lab mod and works on lab targets only.
-- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build = true` or `build_mode = "built"`, the `sbx` god verbs (`research`, `items`, `evo`, `nest`, `wave`, `body`, `body_tp`, and `sbx_mode` with `mode = "god"`) and every tool with `effect = cheat`. The refusal names the rule.
+- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build = true` or `build_mode = "built"`, every `sbx` verb outside a read allowlist (`sandbox_list`, `verbs`, `slice_list`, `slice_ports`, `slice_fingerprint`, `slice_area_of_base`, `slice_timing`, `bonuses`, `wave_status`, `ledger`, `view_shot`, `view_booth`, and `sbx_mode` with `mode = "standard"`), and every `cheat` tool, through `tool_call{deny = {"cheat"}}`. The refusal names the rule. Under realm rules the service refuses `tool` on a mod older than 0.6.1, because an older mod ignores `deny`.
+- Lab targets refuse every verb that uses the realm supervisor or the session DAO: pause, world verbs, reset, release, join. Lab calls have their own throttle keys and never feed the realm's events.
+- `tool_sync` defines libs in `uses:` order and refuses a non-cheat tool whose `uses:` chain reaches a cheat lib.
 - The admin override is an `admin_token` argument that matches `RLM_FACTORIO_ADMIN_TOKEN_FILE`, by default `~/.config/rlm-factorio/admin-token`. It lifts every realm-rules refusal. A missing file means no override. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
 - `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
 
