@@ -79,7 +79,7 @@ Every god call records what it did with `sbx.ledger_add(name, entry)`. `entry.ki
 
 - `entity`: `entity = <LuaEntity>`. A spawned infinity chest, loader, pipe, void, power interface, nest, unit or body. Slice port closers count too.
 - `bonus`: `field`, `before`, `after`. A force bonus that a god call set.
-- `research`: `tech`, `before = {researched, level}`, `after`.
+- `research`: `tech`, `before = {researched, level}`, `after`. Or `recipe`, with `before` and `after` as the enabled flag.
 - `body`: `entity`, `before = {reach, build, mine, destructible}`.
 
 `sbx_mode{name, mode = "standard", research = "copy" | "keep"}` walks the ledger backwards and undoes each entry. It skips an entity that is no longer valid. In standard mode every god verb fails with `standard_mode`, and reads still work. `sbx_mode{name, mode = "god"}` enables god verbs again. The ledger keeps growing across switches: an undone entry stays, flagged `undone`, so a second switch skips it. `research = "copy"` always ends with `copy_from(player)`, because standard rules mean the player's research. `slice_reset` prunes entity entries whose entity is gone.
@@ -115,7 +115,7 @@ Each verb takes `name`, the sandbox.
 
 | Verb | Args | Returns |
 |---|---|---|
-| `research` | `mode = "copy" \| "list" \| "levels" \| "all" \| "none"`, `techs`, `levels = {tech = N}`, `recipes` | changed techs |
+| `research` | `mode = "copy" \| "list" \| "levels" \| "all" \| "none"`, `techs`, `levels = {tech = N}`, `recipes` | changed techs. An in-place box refuses `all` and `none`, and its switch to standard replays each entry's `before` |
 | `bonuses` | | every bonus field of the sandbox force (a read) |
 | `items` | `at`, `items = {{name, count, quality}}`, `target = "chest" \| "infinity" \| "belt" \| "entity" \| "ground"`, `entity` | spawned unit numbers |
 | `evo` | `set` | evolution factor of the sandbox surface |
@@ -123,7 +123,7 @@ Each verb takes `name`, the sandbox.
 | `wave` | `from`, `target`, `units = {name = count}`, `radius` | `group` |
 | `wave_status` | `group` or `name` | alive, killed, state (a read) |
 | `body` | `at`, `reach = 1000`, `invulnerable = true` | unit number |
-| `body_tp` | `at`, `surface`, `unit` (default: the newest body) | |
+| `body_tp` | `at`, `surface`, `unit` (default: the newest body) | `unit`, `old_unit`. A move to another surface clones the body, so its unit number changes |
 | `sbx_mode` | `mode`, `research` | counts undone and skipped |
 | `ledger` | | the entries (a read) |
 
