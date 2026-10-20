@@ -2,6 +2,10 @@
 -- Each module exports hooks (on_init, on_configuration_changed, on_load, on_tick, nth = {[n] = fn},
 -- events = {[defines.events.x] = fn}) and remote verbs (remote = {verb = fn}). See CONTRACT.md § sbx.
 local modules = {require("sbx"), require("slice"), require("god"), require("view")}
+local sbx = modules[1]
+for _, m in ipairs(modules) do
+  if m.on_drop then sbx.drop_hooks[#sbx.drop_hooks + 1] = m.on_drop end
+end
 
 local function each(hook, ...)
   for _, m in ipairs(modules) do

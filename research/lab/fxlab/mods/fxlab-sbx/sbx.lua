@@ -72,20 +72,31 @@ function M.new(a)
   return box
 end
 
--- drop{name}: delete the sandbox's surfaces and merge its force away. An in-place box only loses its record:
--- its owner (slice.lua) must remove what it placed before it drops the box.
+-- Modules that keep state per sandbox register on_drop(name, box) here (the dispatcher fills it), so a box dropped
+-- by any verb takes its module state with it. A hook that raises aborts the drop.
+M.drop_hooks = {}
+
+-- own_surface(name, surface_name): a further surface the box owns, deleted with it.
+function M.own_surface(name, sname)
+  local box = M.get(name)
+  box.surfaces = box.surfaces or {}
+  box.surfaces[#box.surfaces + 1] = sname
+end
+
+-- drop{name}: run the modules' drop hooks, then delete the box's own surfaces and merge its force away.
+-- An in-place box only loses its record: its surface and force belong to the world.
 function M.drop(name)
   local box = M.get(name)
-  if box.inplace then
-    storage.sbx.boxes[name] = nil
-    storage.sbx.ledger[name] = nil
-    return
+  for _, hook in ipairs(M.drop_hooks) do hook(name, box) end
+  if not box.inplace then
+    local owned = {box.surface, box.surface .. "-snap"}
+    for _, sname in ipairs(box.surfaces or {}) do owned[#owned + 1] = sname end
+    for _, sname in ipairs(owned) do
+      if game.surfaces[sname] then game.delete_surface(sname) end
+    end
+    local f = M.force(box)
+    if f then game.merge_forces(f, "neutral") end
   end
-  for sname in pairs(game.surfaces) do
-    if sname == box.surface or sname:sub(1, #box.surface + 1) == box.surface .. "-" then game.delete_surface(sname) end
-  end
-  local f = M.force(box)
-  if f then game.merge_forces(f, "neutral") end
   storage.sbx.boxes[name] = nil
   storage.sbx.ledger[name] = nil
 end

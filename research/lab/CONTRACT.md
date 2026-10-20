@@ -53,7 +53,7 @@ Error codes: `bad_args`, `no_sandbox`, `exists`, `force_cap`, `standard_mode`, `
 ### Modules
 
 - `control.lua` is the dispatcher. It alone registers event handlers, because Factorio keeps one handler per event per mod and a second registration silently replaces the first.
-- A module returns a table with optional hooks: `on_init`, `on_configuration_changed`, `on_load`, `on_tick(ev)`, `nth = {[n] = fn}`, `events = {[defines.events.x] = fn}`. It exports verbs as `remote = {verb = fn}`. A verb name defined twice stops the mod from loading.
+- A module returns a table with optional hooks: `on_init`, `on_configuration_changed`, `on_load`, `on_tick(ev)`, `nth = {[n] = fn}`, `events = {[defines.events.x] = fn}`, and `on_drop(name, box)`, which runs before any sandbox is dropped, whichever verb drops it. A hook that raises aborts the drop. It exports verbs as `remote = {verb = fn}`. A verb name defined twice stops the mod from loading.
 - A module keeps its state under its own key: `storage.sbx` (core), `storage.slice`, `storage.god`, `storage.view`.
 - **WARNING** `on_load` must not write `storage`. A save whose `on_load` changes `storage` does not load.
 - **CAUTION** Every peer runs the mod, the camera client included. Keep every state change deterministic. Use no `math.random` outside `game.create_random_generator`, and no state kept in Lua locals across ticks that a joining peer would not have.
@@ -67,7 +67,7 @@ Error codes: `bad_args`, `no_sandbox`, `exists`, `force_cap`, `standard_mode`, `
 | `sandbox_list` | | `sandboxes`: name, surface, force, mode, created, inplace, ledger (entry count) |
 | `verbs` | | every verb name |
 
-Module functions for the other modules: `sbx.get(name)`, `sbx.new(args)`, `sbx.drop(name)`, `sbx.surface(box)`, `sbx.force(box)`, `sbx.require_god(name)`, `sbx.ledger_add(name, entry)`, `sbx.ledger(name)`, `sbx.fail(code, detail)`.
+Module functions for the other modules: `sbx.get(name)`, `sbx.new(args)`, `sbx.drop(name)`, `sbx.own_surface(name, surface)` (a further surface deleted with the box; `sbx-<name>-snap` is always deleted), `sbx.surface(box)`, `sbx.force(box)`, `sbx.require_god(name)`, `sbx.ledger_add(name, entry)`, `sbx.ledger(name)`, `sbx.fail(code, detail)`.
 
 An in-place box adopts an existing surface and force, for example `nauvis` and `player`. Dropping it only removes the record. Its owner removes what it placed first.
 

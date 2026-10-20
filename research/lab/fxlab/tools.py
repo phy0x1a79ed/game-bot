@@ -65,11 +65,39 @@ def _check(r):
     return r
 
 
+def uses(tool):
+    return [u.strip() for u in tool["header"].get("uses", "").split(",") if u.strip()]
+
+
+def order(tools, names=None):
+    """The chosen tools and the libs they use, each lib after the libs it uses and every lib before any call.
+
+    Raises ValueError on a missing lib or a cycle.
+    """
+    out, state = [], {}
+
+    def visit(n, via):
+        if n not in tools:
+            raise ValueError(f"{via} uses {n}, which is not in the library")
+        if state.get(n) == "done":
+            return
+        if state.get(n) == "open":
+            raise ValueError(f"lib cycle through {n}")
+        state[n] = "open"
+        for u in uses(tools[n]):
+            visit(u, n)
+        state[n] = "done"
+        out.append(n)
+
+    for n in tools if names is None else names:
+        visit(n, "sync")
+    return sorted(out, key=lambda n: tools[n]["header"]["kind"] != "lib")
+
+
 def sync(lab, names=None, root=TOOLS):
-    """Define the library's tools in the lab, libs first. Returns the names defined."""
+    """Define the library's tools in the lab, each lib before its users. Returns the names defined."""
     tools = library(root)
-    chosen = [n for n in tools if names is None or n in names]
-    chosen.sort(key=lambda n: tools[n]["header"]["kind"] != "lib")
+    chosen = order(tools, names)
     for n in chosen:
         h = tools[n]["header"]
         _check(lab.call("game_bot", "tool_define",
@@ -84,4 +112,4 @@ def call(lab, name, **args):
 
 
 def listing(lab):
-    return _check(lab.call("game_bot", "tool_list", {}))["tools"]
+    return list(_check(lab.call("game_bot", "tool_list", {})).get("tools") or [])
