@@ -76,6 +76,12 @@ local function count_researched(f)
   return n
 end
 
+local function recipe_states(f)
+  local s = {}
+  for n, r in pairs(f.recipes) do s[n] = r.enabled end
+  return s
+end
+
 local function count_recipes(f)
   local n = 0
   for _, r in pairs(f.recipes) do if r.enabled then n = n + 1 end end
@@ -104,7 +110,10 @@ R.research = function(a)
   local box = sbx.require_god(a.name)
   local f = sbx.force(box)
   local mode = a.mode or "copy"
-  local before = snapshot(f)
+  if box.inplace and (mode == "none" or mode == "all") then
+    sbx.fail("bad_args", "research mode " .. mode .. " would rewrite the real " .. f.name .. " force; use list or levels")
+  end
+  local before, recipes_before = snapshot(f), recipe_states(f)
   if mode == "copy" then
     copy_research(f)
   elseif mode == "list" then
@@ -137,6 +146,12 @@ R.research = function(a)
       local r = f.recipes[n]
       if not r then sbx.fail("bad_args", "no recipe " .. tostring(n)) end
       r.enabled = true
+    end
+  end
+  -- Recipe entries go first: sbx_mode replays newest first, so the techs are undone before the recipes are restored.
+  for n, r in pairs(f.recipes) do
+    if recipes_before[n] ~= r.enabled then
+      sbx.ledger_add(a.name, {kind = "research", recipe = n, before = recipes_before[n], after = r.enabled})
     end
   end
   local changed = {}
@@ -187,7 +202,7 @@ local function entity_by_unit(name, unit)
   local e = unit and game.get_entity_by_unit_number(unit)
   if e then return e end
   for _, entry in ipairs(sbx.ledger(name)) do
-    if entry.unit == unit and entry.entity.valid then return entry.entity end
+    if entry.entity and entry.unit and entry.unit == unit and entry.entity.valid then return entry.entity end
   end
 end
 
@@ -233,6 +248,7 @@ R.items = function(a)
   local target = a.target or "chest"
   local units, totals = {}, {}
   if target == "entity" then
+    if type(a.entity) ~= "number" then sbx.fail("bad_args", "target entity needs entity, a unit number") end
     local e = entity_by_unit(a.name, a.entity)
     if not e then sbx.fail("not_found", "no entity with unit number " .. tostring(a.entity)) end
     insert_all(e, a.items, totals)
@@ -380,18 +396,42 @@ R.body = function(a)
 end
 
 -- body_tp{name, at, surface, unit}: move a body, by default the newest one, to a position on a surface.
+-- A character without a player cannot teleport across surfaces, so it is cloned there and the old one destroyed.
 R.body_tp = function(a)
   local box = sbx.require_god(a.name)
   local at = point(a.at)
   local s = a.surface and game.surfaces[a.surface] or sbx.surface(box)
   if not s then sbx.fail("not_found", "no surface " .. tostring(a.surface)) end
-  local body
+  local entry
   for _, e in ipairs(sbx.ledger(a.name)) do
-    if e.kind == "body" and e.entity.valid and (not a.unit or e.unit == a.unit) then body = e.entity end
+    if e.kind == "body" and e.entity.valid and (not a.unit or e.unit == a.unit) then entry = e end
   end
-  if not body then sbx.fail("not_found", "no body") end
+  if not entry then sbx.fail("not_found", "no body") end
+  local body = entry.entity
   ground(s, at)
-  return {teleported = body.teleport(at, s), unit = body.unit_number}
+  if body.surface.index == s.index then
+    if not body.teleport(at, s) then sbx.fail("bad_args", "cannot teleport the body to " .. at.x .. "," .. at.y) end
+    return {teleported = true, unit = body.unit_number, position = body.position}
+  end
+  local p = s.find_non_colliding_position("character", at, 10, 0.5) or at
+  local new = body.clone{position = p, surface = s, force = body.force}
+  if not new then sbx.fail("bad_args", "cannot clone the body to " .. s.name .. " at " .. p.x .. "," .. p.y) end
+  for _, field in pairs(BODY_FIELDS) do new[field] = body[field] end
+  new.destructible = body.destructible
+  local old = body.unit_number
+  body.destroy()
+  entry.entity, entry.unit, entry.position = new, new.unit_number, new.position
+  return {teleported = true, unit = new.unit_number, old_unit = old, position = new.position}
+end
+
+local function restore_research(f, e)
+  if e.recipe then
+    f.recipes[e.recipe].enabled = e.before
+    return
+  end
+  local t = f.technologies[e.tech]
+  t.researched = e.before.researched
+  if is_infinite(t) then t.level = e.before.level end
 end
 
 -- sbx_mode{name, mode = "standard" | "god", research = "copy" | "keep"}
@@ -403,13 +443,16 @@ R.sbx_mode = function(a)
   elseif a.mode ~= "standard" then
     sbx.fail("bad_args", "mode is standard or god")
   end
-  local keep = a.research == "keep"
   local f = sbx.force(box)
+  local keep = a.research == "keep"
+  -- A box on the player force has no copy to fall back on, so its research is replayed from the ledger.
+  local replay = f.name == "player"
+  local skip_research = keep and not replay
   local list = sbx.ledger(a.name)
   local undone, skipped, researched = 0, 0, 0
   for i = #list, 1, -1 do
     local e = list[i]
-    if not e.undone and not (keep and e.kind == "research") then
+    if not e.undone and not (skip_research and e.kind == "research") then
       if e.kind == "entity" then
         if e.entity.valid then e.entity.destroy() else skipped = skipped + 1 end
       elseif e.kind == "body" then
@@ -428,6 +471,7 @@ R.sbx_mode = function(a)
         end
       elseif e.kind == "research" then
         researched = researched + 1
+        if replay then restore_research(f, e) end
       end
       e.undone = true
       undone = undone + 1
@@ -443,7 +487,7 @@ R.ledger = function(a)
   local out = {}
   for _, e in ipairs(sbx.ledger(sbx.get(a.name).name)) do
     local row = {kind = e.kind, tick = e.tick, undone = e.undone or false, field = e.field, tech = e.tech,
-                 before = e.before, after = e.after, surface = e.surface}
+                 before = e.before, after = e.after, surface = e.surface, recipe = e.recipe}
     if e.entity then
       local v = e.entity.valid
       row.valid = v

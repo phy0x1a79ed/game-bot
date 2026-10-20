@@ -174,7 +174,12 @@ def god_items(lab):
     held_body = jlua(lab, ent("it", body["position"], "character") +
                      f'rcon.print(helpers.table_to_json({{iron = e.get_item_count("iron-plate"), '
                      f'ammo = e.get_item_count("firearm-magazine")}}))')
-    body_ok = held_body["iron"] == 100 and held_body["ammo"] == 20
+    try:
+        lab.sbx("items", name="it", target="entity", items=[{"name": "coal", "count": 1}])
+        no_entity = "allowed"
+    except SbxError as exc:
+        no_entity = exc.code
+    body_ok = held_body["iron"] == 100 and held_body["ammo"] == 20 and no_entity == "bad_args"
     # ground
     lab.sbx("items", name="it", at=[30, 30], target="ground", items=[{"name": "stone", "count": 10}])
     spilled = jlua(lab, 'local n = 0 for _, e in pairs(game.surfaces["sbx-it"].find_entities_filtered{name = "item-on-ground", '
@@ -308,3 +313,106 @@ rcon.print(helpers.table_to_json({{body_valid = c ~= nil and c.valid, reach = c.
                   f"{again['units']}",
                   data={"switch": sw, "state": still, "research": detail, "gates": gates, "entries": n_entries,
                         "diverged_before": diverged, "infinity": inf["units"], "nest": nest["units"]})
+
+
+def player_full(lab):
+    """The player force's techs with levels, enabled recipes and bonuses, as one comparable value."""
+    return lab.lua('''
+local f = game.forces.player
+local techs, recipes, bonuses = {}, {}, {}
+for n, t in pairs(f.technologies) do techs[#techs + 1] = n .. "=" .. tostring(t.researched) .. "/" .. t.level end
+for n, r in pairs(f.recipes) do if r.enabled then recipes[#recipes + 1] = n end end
+for _, k in ipairs{"mining_drill_productivity_bonus", "inserter_stack_size_bonus", "laboratory_speed_modifier",
+  "manual_mining_speed_modifier", "worker_robots_speed_modifier", "character_inventory_slots_bonus"} do
+  bonuses[#bonuses + 1] = k .. "=" .. tostring(f[k])
+end
+for cat in pairs(prototypes.ammo_category) do bonuses[#bonuses + 1] = cat .. "=" .. tostring(f.get_ammo_damage_modifier(cat)) end
+table.sort(techs) table.sort(recipes) table.sort(bonuses)
+rcon.print(helpers.table_to_json({techs = techs, recipes = recipes, bonuses = bonuses}))''')
+
+
+@fixture(source=SAVE, tags={"god"})
+def god_inplace_research(lab):
+    lab.sbx("sandbox_new", name="ip", inplace={"surface": "nauvis", "force": "player"})
+    pick = jlua(lab, '''
+local f = game.forces.player
+local tech, recipe
+for n, t in pairs(f.technologies) do
+  if not t.researched and t.prototype.max_level <= 1000000 and (not tech or n < tech) then tech = n end
+end
+for n, r in pairs(f.recipes) do if not r.enabled and not r.hidden and (not recipe or n < recipe) then recipe = n end end
+rcon.print(helpers.table_to_json({tech = tech, recipe = recipe, mining = f.technologies["mining-productivity-3"].level}))''')
+    before = player_full(lab)
+    refused = {}
+    for mode in ("none", "all"):
+        try:
+            lab.sbx("research", name="ip", mode=mode)
+            refused[mode] = "allowed"
+        except SbxError as exc:
+            refused[mode] = exc.code
+    untouched = player_full(lab) == before
+
+    lab.sbx("research", name="ip", mode="levels", levels={"mining-productivity-3": pick["mining"] + 2})
+    lab.sbx("research", name="ip", mode="list", techs=[pick["tech"]], recipes=[pick["recipe"]])
+    changed = player_full(lab)
+    diverged = changed != before
+    mid = jlua(lab, f'''
+local f = game.forces.player
+rcon.print(helpers.table_to_json({{tech = f.technologies["{pick['tech']}"].researched,
+  recipe = f.recipes["{pick['recipe']}"].enabled, level = f.technologies["mining-productivity-3"].level}}))''')
+    ledger = lab.sbx("ledger", name="ip")
+    recipe_entries = [e for e in ledger["entries"] if e.get("recipe")]
+
+    sw = lab.sbx("sbx_mode", name="ip", mode="standard", research="keep")
+    after = player_full(lab)
+    equal = after == before
+    detail = {}
+    if not equal:
+        for k in before:
+            detail[k] = sorted(set(before[k]) ^ set(after[k]))[:10]
+    ok = (refused == {"none": "bad_args", "all": "bad_args"} and untouched and diverged and mid["tech"]
+          and mid["recipe"] and mid["level"] == pick["mining"] + 3 and len(recipe_entries) >= 1 and equal)
+    return Result(ok, f"none/all refused {refused}; level {pick['mining']} -> {mid['level']}, {pick['tech']} and "
+                  f"{pick['recipe']} on, {len(recipe_entries)} recipe entries; after the switch the player force "
+                  f"equals its start: {equal}, undone {sw['undone']}",
+                  data={"pick": pick, "mid": mid, "refused": refused, "diff": detail, "switch": sw})
+
+
+@fixture(source=SAVE, tags={"god"})
+def god_body_tp(lab):
+    lab.sbx("sandbox_new", name="bt")
+    ground(lab, "bt", 0, 0, 2)
+    ground(lab, "bt", 0, 0, 0)
+    lab.lua('game.surfaces.nauvis.request_to_generate_chunks({0, 0}, 2) game.surfaces.nauvis.force_generate_chunk_requests()')
+    body = lab.sbx("body", name="bt", at=[10, 10], reach=500, invulnerable=True)
+    lab.sbx("items", name="bt", target="entity", entity=body["unit"],
+            items=[{"name": "iron-plate", "count": 77}, {"name": "firearm-magazine", "count": 9}])
+    read = ('local c = game.get_entity_by_unit_number(%d) '
+            'rcon.print(helpers.table_to_json({valid = c ~= nil and c.valid, surface = c and c.surface.name, '
+            'iron = c and c.get_item_count("iron-plate"), ammo = c and c.get_item_count("firearm-magazine"), '
+            'reach = c and c.character_reach_distance_bonus, mine = c and c.character_resource_reach_distance_bonus, '
+            'destructible = c and c.destructible, x = c and c.position.x, y = c and c.position.y}))')
+    start = jlua(lab, read % body["unit"])
+    out = lab.sbx("body_tp", name="bt", at=[5, 5], surface="nauvis", unit=body["unit"])
+    old_gone = jlua(lab, read % body["unit"])
+    there = jlua(lab, read % out["unit"])
+    on_ledger = [e for e in lab.sbx("ledger", name="bt")["entries"] if e["kind"] == "body"]
+    over = lab.sbx("items", name="bt", target="entity", entity=out["unit"], items=[{"name": "coal", "count": 3}])
+    back = lab.sbx("body_tp", name="bt", at=[-20, 30], surface="sbx-bt")
+    home = jlua(lab, read % back["unit"])
+    near = lab.sbx("body_tp", name="bt", at=[-30, 30])
+    moved = jlua(lab, read % near["unit"])
+    sw = lab.sbx("sbx_mode", name="bt", mode="standard")
+    reset = jlua(lab, read % near["unit"])
+    kept = lambda d: d["iron"] == 77 and d["ammo"] == 9 and d["reach"] == 500 and d["mine"] == 500 and not d["destructible"]
+    ok = (start["surface"] == "sbx-bt" and out["teleported"] and out["unit"] != body["unit"] and not old_gone["valid"]
+          and there["valid"] and there["surface"] == "nauvis" and kept(there) and abs(there["x"] - 5) < 10
+          and len(on_ledger) == 1 and on_ledger[0]["unit"] == out["unit"] and over["inserted"] == {"coal": 3}
+          and back["teleported"] and home["surface"] == "sbx-bt" and kept(home) and near["teleported"]
+          and near["unit"] == back["unit"] and abs(moved["x"] + 30) < 5 and kept(moved)
+          and reset["reach"] == 0 and reset["destructible"] and reset["iron"] == 77)
+    return Result(ok, f"body {body['unit']} to nauvis as {out['unit']} (old gone={not old_gone['valid']}, iron "
+                  f"{there['iron']}, ammo {there['ammo']}, reach {there['reach']}), back as {back['unit']} on "
+                  f"{home['surface']}; same-surface move ok; ledger entries {len(on_ledger)}; after standard reach "
+                  f"{reset['reach']}",
+                  data={"start": start, "nauvis": there, "home": home, "moved": moved, "reset": reset, "switch": sw})
