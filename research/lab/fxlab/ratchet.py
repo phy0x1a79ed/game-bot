@@ -30,10 +30,14 @@ def commit():
 
 def run_one(name):
     spec = FIXTURES[name]
-    lab = Lab(f"rk-{name.replace('_', '-')}")
     t0 = time.time()
+    if spec["source"] is None:  # a module that failed to import: no lab to start
+        res = spec["fn"](None)
+        return name, {"ok": res.ok, "detail": res.detail, "score": res.score, "data": res.data, "wall_s": 0.0}
+    lab = Lab(f"rk-{name.replace('_', '-')}")
     try:
-        lab.up(save=None if spec["source"] == "create" else spec["source"], create=spec["source"] == "create")
+        lab.up(save=None if spec["source"] == "create" else spec["source"], create=spec["source"] == "create",
+               live=spec["live"], camera=spec["camera"])
         res = spec["fn"](lab)
     except Exception as exc:
         res = Result(False, f"error: {exc!r}", data={"trace": traceback.format_exc()})
@@ -72,11 +76,12 @@ def main(argv=None):
     p.add_argument("names", nargs="*", help="fixtures to run; default all")
     p.add_argument("--tag", action="append", default=[])
     p.add_argument("--skip-tag", action="append", default=[])
-    p.add_argument("--parallel", type=int, default=4)
+    p.add_argument("--parallel", type=int, default=2)
     p.add_argument("--no-advance", action="store_true")
     a = p.parse_args(argv)
     names = a.names or [n for n, s in FIXTURES.items()
-                        if (not a.tag or s["tags"] & set(a.tag)) and not s["tags"] & set(a.skip_tag)]
+                        if (not a.tag or s["tags"] & set(a.tag) or "import" in s["tags"])
+                        and not s["tags"] & set(a.skip_tag)]
     RATCHET.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     with ThreadPoolExecutor(max_workers=a.parallel) as pool:

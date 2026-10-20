@@ -1,0 +1,9 @@
+{
+  "name": "fxlab-sbx",
+  "version": "0.1.0",
+  "title": "fxlab sandboxes",
+  "author": "game-bot",
+  "description": "Lab-only: sandboxes (a surface and a force) cut from a world, god-mode calls with a reversible ledger, and the camera booth.",
+  "factorio_version": "2.1",
+  "dependencies": ["base"]
+}
