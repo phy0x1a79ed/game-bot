@@ -7,7 +7,8 @@ local function exists(e)
 end
 local cnt, bad, ok, skip, placed, fail = {}, {}, 0, 0, 0, {}
 if MODE == 'place' then -- trees and rocks in the footprint get deconstruction marks; rerun 'place' once robots clear them
-  for _, t in pairs(s.find_entities_filtered{area = {{96, 16}, {155, 54}}, type = {'tree', 'simple-entity'}}) do t.order_deconstruction('player') end
+  local okA, AR = pcall(function() return AREA end)
+  for _, t in pairs(s.find_entities_filtered{area = (okA and AR) or {{96, 16}, {155, 54}}, type = {'tree', 'simple-entity'}}) do t.order_deconstruction('player') end
 end
 if MODE == 'recipes' then
   local set = 0
@@ -29,6 +30,7 @@ for _, e in pairs(L) do
         local c = {name = 'entity-ghost', inner_name = e.name, position = {e.x, e.y}, direction = e.dir, force = 'player'}
         if e.extra and e.extra.type then c.type = e.extra.type end
         if e.extra and e.extra.recipe then c.recipe = e.extra.recipe end
+        if e.extra and e.extra.ammo then c.insert_plan = {{id = {name = e.extra.ammo}, items = {in_inventory = {{inventory = defines.inventory.turret_ammo, stack = 0, count = e.extra.n}}}}} end
         local g = s.create_entity(c)
         if g then placed = placed + 1 else fail[#fail + 1] = string.format('%s(%.1f,%.1f)', e.name, e.x, e.y) end
       end

@@ -2,8 +2,9 @@
 do
   -- power coverage and pole connectivity (medium pole: supply 3.5, wire 9)
   local poles = {}
+  local okA, AR = pcall(function() return AREA end)
   for _, e in pairs(L) do if e.name == 'medium-electric-pole' then poles[#poles + 1] = {x = e.x, y = e.y, new = true} end end
-  for _, p in pairs(s.find_entities_filtered{type = 'electric-pole', area = {{85, 5}, {160, 60}}}) do
+  for _, p in pairs(s.find_entities_filtered{type = 'electric-pole', area = (okA and AR) or {{85, 5}, {160, 60}}}) do
     if p.electric_network_id then poles[#poles + 1] = {x = p.position.x, y = p.position.y, new = false, sup = p.prototype.get_supply_area_distance(), wire = p.prototype.get_max_wire_distance()} end
   end
   local half = {['assembling-machine-2'] = {1.35, 1.35}, ['assembling-machine-1'] = {1.35, 1.35}, ['chemical-plant'] = {1.35, 1.35},

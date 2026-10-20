@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# pe-state.sh SEAT — inventory, evolution, min FO ammo, player-force kill counts
+S=${1:-seat-2ed242b9}
+/home/tony/agentic_workspace/projects/game-bot/factorio/research/lib/act.sh exec_lua $S code="local c=game.players['$S'].character local o={} for n,k in pairs(c.get_main_inventory().get_contents()) do o[#o+1]=(type(k)=='table' and k.name..' '..k.count or n..' '..k) end local m=999 for _,e in pairs(game.surfaces[1].find_entities_filtered{name='gun-turret',force='player',area={{450,-200},{500,-160}}}) do m=math.min(m,e.get_inventory(defines.inventory.turret_ammo).get_item_count()) end local ks={} for n,k in pairs(game.forces.player.get_kill_count_statistics(1).input_counts) do ks[#ks+1]=n..'='..k end rcon.print(table.concat(o,';')..' evo '..game.forces.enemy.get_evolution_factor(1)..' minFO '..m..' hp '..c.health..' tick '..game.tick..' kills '..table.concat(ks,','))" | jq -r .output
