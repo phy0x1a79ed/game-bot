@@ -2,8 +2,10 @@
 -- A slice clones a rectangle of a source surface to the play surface `sbx-<name>` at the same coordinates, keeps a
 -- frozen copy on `sbx-<name>-snap`, and closes every connection that crosses the cut with an infinity chest, loader
 -- or pipe so the play surface runs alone. `slice_reset` wipes the play rectangle and clones the snapshot back.
--- storage.slice[name] = {area, big, source, snap, ports, unhandled, rails, rec (belts and fluids the freeze cannot
--- hold), fp (snapshot fingerprint), closer_ids, closer_ents, feeds, drains, evo, pollution, reset_at, inplace}.
+-- storage.slice[name] = {area, big (area plus the overhang of cloned entities), source, ports_data (what a closer is
+-- built from), ports and unhandled (as reported), rails, rec (belts, fluids and roboport energy the freeze cannot
+-- hold), fp (the snapshot fingerprint), closer_ids and closer_ents (every entity a closer placed), feeds and drains
+-- (scripted closers), evo, pollution, reset_at, inplace}.
 local sbx = require("sbx")
 local M = {remote = {}}
 
@@ -29,6 +31,7 @@ local SKIP = {character = true, corpse = true, explosion = true, ["smoke-with-tr
 local FP_SKIP = {fire = true}
 for k in pairs(SKIP) do FP_SKIP[k] = true end
 local BIG_PAD = 8
+local MAX_DETAIL = 20000  -- larger snapshots keep their digest but not their per-entity records
 local SURFACE_SIZE = 2040
 
 local function state()
@@ -717,7 +720,7 @@ local function strip(ports)
   local out = {}
   for i, p in ipairs(ports) do
     local c = {}
-    for k, v in pairs(p) do if k ~= "cut" and k ~= "lanes_all" then c[k] = v end end
+    for k, v in pairs(p) do if k ~= "cut" then c[k] = v end end
     c.position = {x = p.x, y = p.y}
     out[i] = c
   end
@@ -840,13 +843,9 @@ local function clone_missed(src, dst, area, big)
   return names, {}
 end
 
-local function surface_pair(box, name)
-  return sbx.surface(box), game.surfaces[box.surface .. "-snap"]
-end
-
 -- Clone the snapshot onto the play surface and bring the play surface up. Used by build and reset.
 local function bring_up(name, box, S, trains_auto)
-  local play, snap = surface_pair(box, name)
+  local play, snap = sbx.surface(box), game.surfaces[box.surface .. "-snap"]
   lap("wipe")
   destroy_closers(S)
   lap("clone")
@@ -959,14 +958,14 @@ M.remote.slice_build = function(a)
     lap("fingerprint")
     -- taken on the play surface, closers excluded: a reset repeats the same steps and so reproduces it exactly
     local fp, lines = fingerprint(sbx.surface(box), area, S.closer_ids)
-    S.fp, S.fp_lines, S.entities = fp, lines, fp.entities
+    S.fp, S.entities = fp, fp.entities
+    if #lines <= MAX_DETAIL then S.fp_lines = lines end
     lap(nil)
   end)
   if not ok then
     lap(nil)
     pcall(sbx.drop, name)
-    storage.slice[name] = nil
-    if type(err) == "table" then error(err, 0) end
+    state()[name] = nil
     error(err, 0)
   end
   return summary(state()[name])
@@ -1133,7 +1132,6 @@ M.remote.slice_inplace = function(a)
         for _, w in ipairs(c.connections) do
           local o = w.target.owner
           if o and o.valid and o.unit_number and not inside[o.unit_number] and not seen[o.unit_number] then
-            local before = #S.wires
             wires_of(pole, S.wires, seen_w)
             c.disconnect_from(w.target, w.origin)
           end
