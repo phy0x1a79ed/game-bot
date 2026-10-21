@@ -1,0 +1,30 @@
+[
+  {
+    "id": "redgreen",
+    "save": "run4-closeout",
+    "area": [[111, -40], [153, -14]],
+    "products": ["automation-science-pack", "logistic-science-pack"],
+    "notes": "Red and green science: 7 red and 8 green assemblers fed by gear, cable, circuit, inserter and belt assemblers. 298 entities, 4 ports (1 belt-in with iron and copper lanes, 2 belt-out, power). 63 red/min is the red ceiling."
+  },
+  {
+    "id": "smelt-drills",
+    "save": "run4-closeout",
+    "area": [[-52, -62], [-30, -40]],
+    "products": ["iron-plate"],
+    "notes": "Iron smelting column with its own drills: 8 electric mining drills (6 sit on depleted ore), 8 steel furnaces, 73 belts, 16 inserters, 2 steam engines. 265 entities, 6 ports (2 belt-in with iron-ore and coal lanes, 1 belt-out, 2 steam feeds, power). Untouched nauvis makes 0 plates here. Closer alternative that is alive: [[30,52],[55,72]], 17 copper furnaces fed by ore belts, 280 entities, 15 ports, 600 plates/min."
+  },
+  {
+    "id": "fast-circuits",
+    "save": "run4-closeout",
+    "area": [[0, 30], [28, 46]],
+    "products": ["electronic-circuit"],
+    "notes": "Circuit array with 33 fast inserters, the highest tier the save has: no stack or bulk inserter is built and the stack-inserter tech is not researched. 6 cable and 4 circuit assemblers. 180 entities, 12 ports (2 belt-in, 4 belt-out, 3 outside inserter, 2 underground-pipe feeds, power). Circuit ceiling 240/min."
+  },
+  {
+    "id": "oil-lube",
+    "save": "run4-closeout",
+    "area": [[38, -14], [74, 14]],
+    "products": ["petroleum-gas", "lubricant", "engine-unit"],
+    "notes": "Fluid block: 2 advanced-oil-processing refineries, 3 chemical plants (heavy-oil cracking, lubricant, others), 7 assemblers, a steel furnace, a storage tank and 7 steam engines, with 42 underground and 95 plain pipes. 411 entities, 38 ports (20 pipe, 8 belt-in, 4 belt-out, 5 outside inserter, power). Crude oil, water and steam come from infinity pipes at 50%. Not in the corpus: a rect that cuts through the pole of an outside inserter leaves the in-place arm with 'no pole reaches the rebuilt inserter' unhandled."
+  }
+]
