@@ -13,7 +13,7 @@ from .slice import RED_GREEN
 
 SEEDED = "run4-closeout+cam"
 SAMPLE = (900, 600)
-MIN_COLOURS = 12
+MIN_COLOURS = 200
 
 CAPTURE = """
 local s = game.surfaces[{surface}]
