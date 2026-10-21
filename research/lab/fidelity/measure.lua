@@ -1,18 +1,29 @@
--- Reads what a rectangle has made so far, the same way on a slice and on the source surface.
--- Input: global ARGS = {{key, surface, area}, ...}. Prints one JSON object keyed by `key`:
---   tick, recipes = {name = {n, working, speed, cap, crafts, pcrafts, energy, products, ingredients}}, stock = {item = count}.
--- `working` is how many of the `n` machines have the status working at this tick.
--- crafts counts finished crafts plus the progress of the craft under way, so a short window has no integer noise.
--- A machine counts when its centre lies inside the rectangle. Port closers (loaders, infinity chests and pipes,
--- the energy interface) hold nothing that belongs to the module, so the stock leaves them out.
+-- Reads what a rectangle holds, the same way on a slice and on the source surface.
+-- Input: global ARGS = {{key, surface, area, closers}, ...}, where `closers` lists {name, x, y} of the entities that port
+-- closers placed (read from the sandbox ledger). Prints one JSON object keyed by `key`:
+--   tick, stock = {item = count},
+--   recipes = {name = {energy, products, ingredients}},
+--   machines = {["name@x,y"] = {r = recipe, pf = products_finished, pg = crafting_progress, sp = crafting_speed,
+--                                pb = productivity_bonus}}.
+-- products_finished already counts the productivity bonus, so it is in product units, and the craft under way counts
+-- crafting_progress x (1 + pb). The caller takes deltas per machine and only for a machine that kept its recipe.
+-- A machine counts when its centre lies inside the rectangle. Closers hold nothing that belongs to the module, so the
+-- stock leaves them out.
 
-local CLOSERS = {["loader-1x1"] = true, ["infinity-chest"] = true, ["infinity-pipe"] = true,
-                 ["electric-energy-interface"] = true}
 local MACHINES = {"assembling-machine", "furnace", "rocket-silo"}
-local STOCK_INVENTORIES = {}
+-- defines.inventory has aliases (several names for one index): read each index once, and none that holds modules
+local MODULE_INDEX, STOCK_INVENTORIES, seen = {}, {}, {}
 for key, index in pairs(defines.inventory) do
-  if not key:find("module") then STOCK_INVENTORIES[#STOCK_INVENTORIES + 1] = index end
+  if key:find("module") then MODULE_INDEX[index] = true end
 end
+for _, index in pairs(defines.inventory) do
+  if not MODULE_INDEX[index] and not seen[index] then
+    seen[index] = true
+    STOCK_INVENTORIES[#STOCK_INVENTORIES + 1] = index
+  end
+end
+
+local function spot(name, x, y) return string.format("%s@%.2f,%.2f", name, x, y) end
 
 local function name_of(x)
   if type(x) == "string" then return x end
@@ -62,32 +73,25 @@ local function stock_of(e, into)
   end
 end
 
-local function read(surface, a)
-  local out = {tick = game.tick, recipes = {}, stock = {}}
+local function read(surface, a, closers)
+  local skip = {}
+  for _, c in ipairs(closers) do skip[spot(c[1], c[2], c[3])] = true end
+  local out = {tick = game.tick, recipes = {}, machines = {}, stock = {}}
   for _, e in pairs(surface.find_entities_filtered{area = a, type = MACHINES}) do
     if inside(e, a) then
       local recipe = e.get_recipe()
       if not recipe and e.type == "furnace" then recipe = e.previous_recipe end
       if recipe then
         local name = name_of(recipe.name or recipe)
-        local r = out.recipes[name]
-        if not r then
-          r = recipe_info(name)
-          r.n, r.speed, r.cap, r.crafts, r.pcrafts, r.working = 0, 0, 0, 0, 0, 0
-          out.recipes[name] = r
-        end
-        local done = e.products_finished + e.crafting_progress
-        r.n = r.n + 1
-        if e.status == defines.entity_status.working then r.working = r.working + 1 end
-        r.speed = r.speed + e.crafting_speed
-        r.cap = r.cap + e.crafting_speed * (1 + e.productivity_bonus)
-        r.crafts = r.crafts + done
-        r.pcrafts = r.pcrafts + done * (1 + e.productivity_bonus)
+        out.recipes[name] = out.recipes[name] or recipe_info(name)
+        out.machines[spot(e.name, e.position.x, e.position.y)] = {
+          r = name, pf = e.products_finished, pg = e.crafting_progress, sp = e.crafting_speed, pb = e.productivity_bonus}
       end
     end
   end
   for _, e in pairs(surface.find_entities_filtered{area = a}) do
-    if inside(e, a) and not CLOSERS[e.name] and e.type ~= "entity-ghost" and e.type ~= "resource" then
+    if inside(e, a) and not skip[spot(e.name, e.position.x, e.position.y)] and e.type ~= "entity-ghost"
+       and e.type ~= "resource" then
       stock_of(e, out.stock)
     end
   end
@@ -95,5 +99,5 @@ local function read(surface, a)
 end
 
 local out = {}
-for _, q in ipairs(ARGS) do out[q[1]] = read(game.surfaces[q[2]], q[3]) end
+for _, q in ipairs(ARGS) do out[q[1]] = read(game.surfaces[q[2]], q[3], q[4] or {}) end
 rcon.print(helpers.table_to_json(out))

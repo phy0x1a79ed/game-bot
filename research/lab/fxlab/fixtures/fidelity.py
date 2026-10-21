@@ -5,6 +5,7 @@ and shares nothing with `bench.py`, so the bench never grades itself. Rates are 
 that really elapsed between two reads. A fixture reports every measured number in `data`.
 """
 
+import fcntl
 import json
 import math
 import statistics
@@ -29,6 +30,7 @@ MARGIN = 32
 F5_CAP_MINUTES = 15
 F4_OFFSETS = (3, 7)
 DRAIN_CAP_MINUTES = 30
+DRAIN_IDLE_MINUTES = 3
 MADE_NOTHING = 0.01
 NEST = {"x": -52, "y": 331, "r": 70}
 COMBAT_AREA = [[-196, 187], [92, 475]]
@@ -59,8 +61,14 @@ def restart(lab):
     """Kill the lab's server and start it again on its original save, so the world is exactly as at first load."""
     lab.close()
     seen = lab.logs(200000).count("to(InGame)")
-    labmod.docker("kill", lab.container)
-    labmod.docker("start", lab.container)
+    # the lease counts running servers: hold its lock from the kill to the start so no other worktree takes the slot
+    with open(labmod.SHARED / "lease.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            labmod.docker("kill", lab.container)
+            labmod.docker("start", lab.container)
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
     deadline = time.time() + 180
     while lab.logs(200000).count("to(InGame)") <= seen:
         if time.time() > deadline or not lab.running():
@@ -100,30 +108,62 @@ def align(lab, offset=0):
     return run_until_stopped(lab)
 
 
-def read(lab, queries):
-    """Snapshot rectangles in one RCON call. `queries` maps a key to (surface, area)."""
-    args = [[key, surface, area] for key, (surface, area) in queries.items()]
+def step(lab, ticks):
+    """Run exactly `ticks` ticks (lab.advance overshoots by up to about 15) and stop on the last."""
+    lab.lua(f"fid.stop = {lab.tick() + ticks}")
+    return run_until_stopped(lab)
+
+
+def closers(lab, box):
+    """Name and position of every live entity that a port closer of `box` placed, read from its ledger."""
+    return [[e["name"], e["position"]["x"], e["position"]["y"]]
+            for e in lab.sbx("ledger", name=box)["entries"] if e["kind"] == "entity" and e.get("valid")]
+
+
+def read(lab, queries, boxes=None):
+    """Snapshot rectangles in one RCON call. `queries` maps a key to (surface, area).
+
+    `boxes` maps a key to the sandbox whose closers the stock leaves out.
+    """
+    boxes = boxes or {}
+    args = [[key, surface, area, closers(lab, boxes[key]) if key in boxes else []]
+            for key, (surface, area) in queries.items()]
     code = f'ARGS = helpers.json_to_table([==[{json.dumps(args)}]==])\n' + (FIDELITY / "measure.lua").read_text()
     return json.loads(lab.lua(code))
 
 
 def rates(before, after):
-    """Per-minute rates of one rectangle between two snapshots of it."""
+    """Per-minute rates of one rectangle between two snapshots of it.
+
+    Deltas are taken per machine, and only for a machine that has the same recipe at both reads. products_finished
+    counts product units already, with the productivity bonus; the ceiling adds the bonus to the crafting speed.
+    """
     minutes = (after["tick"] - before["tick"]) / 3600
-    out = {"minutes": minutes, "produced": {}, "consumed": {}, "net": {}, "ceiling": {}, "recipes": {}, "stock": {}}
-    for name, r1 in after["recipes"].items():
-        r0 = before["recipes"].get(name)
-        if r0 is None:
+    out = {"minutes": minutes, "produced": {}, "consumed": {}, "net": {}, "ceiling": {}, "recipes": {}, "stock": {},
+           "skipped": 0}
+    groups = {}
+    for key, m1 in after["machines"].items():
+        m0 = before["machines"].get(key)
+        if m0 is None or m0["r"] != m1["r"]:
+            out["skipped"] += 1
             continue
-        crafts = (r1["crafts"] - r0["crafts"]) / minutes
-        pcrafts = (r1["pcrafts"] - r0["pcrafts"]) / minutes
-        capacity = r1["speed"] * 60 / r1["energy"]
-        out["recipes"][name] = {"machines": r1["n"], "crafts_per_min": crafts, "capacity_per_min": capacity,
+        g = groups.setdefault(m1["r"], {"n": 0, "speed": 0.0, "cap": 0.0, "crafts": 0.0, "units": 0.0})
+        units = (m1["pf"] - m0["pf"]) + (m1["pg"] - m0["pg"]) * (1 + m1["pb"])
+        g["n"] += 1
+        g["speed"] += m1["sp"]
+        g["cap"] += m1["sp"] * (1 + m1["pb"])
+        g["units"] += units
+        g["crafts"] += units / (1 + m1["pb"])
+    for name, g in groups.items():
+        info = after["recipes"][name]
+        crafts, units = g["crafts"] / minutes, g["units"] / minutes
+        capacity = g["speed"] * 60 / info["energy"]
+        out["recipes"][name] = {"machines": g["n"], "crafts_per_min": crafts, "capacity_per_min": capacity,
                                 "throughput": crafts / capacity if capacity else 0.0}
-        for item, amount in r1["products"].items():
-            out["produced"][item] = out["produced"].get(item, 0.0) + pcrafts * amount
-            out["ceiling"][item] = out["ceiling"].get(item, 0.0) + r1["cap"] * amount / r1["energy"] * 60
-        for item, amount in r1["ingredients"].items():
+        for item, amount in info["products"].items():
+            out["produced"][item] = out["produced"].get(item, 0.0) + units * amount
+            out["ceiling"][item] = out["ceiling"].get(item, 0.0) + g["cap"] * amount / info["energy"] * 60
+        for item, amount in info["ingredients"].items():
             out["consumed"][item] = out["consumed"].get(item, 0.0) + crafts * amount
     for item in set(out["produced"]) | set(out["consumed"]):
         out["net"][item] = out["produced"].get(item, 0.0) - out["consumed"].get(item, 0.0)
@@ -174,6 +214,18 @@ class Arms:
         self.queries = {}
 
     def __enter__(self):
+        try:
+            self._build()
+        except BaseException:
+            self.__exit__(None, None, None)
+            raise
+        return self
+
+    def read(self):
+        """Snapshot both rectangles, leaving each box's closers out of the stock."""
+        return read(self.lab, self.queries, boxes=self.names)
+
+    def _build(self):
         align(self.lab, self.offset)
         self.reply["slice"] = timed(self.lab, "slice_build", name=self.names["slice"], area=self.area)
         self.queries["slice"] = (f"sbx-{self.names['slice']}", self.area)
@@ -185,7 +237,6 @@ class Arms:
             run_until_stopped(self.lab)
             self.reply["inplace"] = timed(self.lab, "slice_build", name=self.names["inplace"], area=self.area)
             self.queries["inplace"] = (f"sbx-{self.names['inplace']}", self.area)
-        return self
 
     def __exit__(self, *exc):
         for name in reversed(list(self.names.values())):
@@ -203,12 +254,12 @@ class Arms:
         return {arm: u for arm, r in self.reply.items() if (u := listing(r["unhandled"]))}
 
 
-def window(lab, queries, warmup=WARMUP, ticks=WINDOW):
-    """Advance a warm-up, then read the window's start and end."""
+def window(lab, reader, warmup=WARMUP, ticks=WINDOW):
+    """Advance a warm-up, then read the window's start and end with `reader()`."""
     lab.advance(warmup)
-    first = read(lab, queries)
+    first = reader()
     lab.advance(ticks)
-    return first, read(lab, queries)
+    return first, reader()
 
 
 def sample_machines(lab, queries):
@@ -245,11 +296,12 @@ def fid_f1(lab):
             if arms.unhandled():
                 bad.append(f"{module['id']}: unhandled ports {arms.unhandled()}")
                 continue
-            r0, r1 = window(lab, arms.queries)
+            r0, r1 = window(lab, arms.read)
         mine, base = rates(r0["slice"], r1["slice"]), rates(r0["inplace"], r1["inplace"])
         items = set(mine["net"]) | set(base["net"])
         table = compare(mine, base, items)
         entry.update(minutes=mine["minutes"], products=module["products"], net=table,
+                     skipped_machines={"slice": mine["skipped"], "inplace": base["skipped"]},
                      stock_drain=compare(mine, base, set(mine["stock"]) | set(base["stock"]), key="stock"))
         for item in module["products"]:
             if table.get(item, {}).get("inplace", 0) <= 0:
@@ -267,7 +319,7 @@ def utilisation(counts, snapshot):
     """Per item, the share of machine-samples with status working over every recipe that makes it."""
     seen = {}
     for recipe, c in counts.items():
-        for item in snapshot["recipes"][recipe]["products"]:
+        for item in snapshot["recipes"].get(recipe, {"products": {}})["products"]:
             n, w = seen.get(item, (0, 0))
             seen[item] = (n + c["n"], w + c["working"])
     return {item: w / n for item, (n, w) in seen.items() if n}
@@ -285,10 +337,10 @@ def fid_f2(lab):
                 bad.append(f"{module['id']}: unhandled ports {arms.unhandled()}")
                 continue
             lab.advance(WARMUP)
-            first = read(lab, arms.queries)
+            first = arms.read()
             sample_machines(lab, arms.queries)
             lab.advance(WINDOW)
-            last = read(lab, arms.queries)
+            last = arms.read()
             counts = sampled(lab)["slice"]
         x = rates(first["slice"], last["slice"])
         busy = utilisation(counts, last["slice"])
@@ -325,8 +377,14 @@ def fid_f4(lab):
             start = (lab.tick() // 600 + 2) * 600 + offset
             lab.sbx("slice_reset_at", name=name, tick=start)
             lab.advance(start - lab.tick() + 1)
-            reads = window(lab, arms.queries, warmup=WARMUP - (lab.tick() - start))
-            runs[offset] = {"reset_tick": start, "rates": rates(reads[0]["slice"], reads[1]["slice"])}
+            # a failed scheduled reset raises nothing: it shows up as last_error in slice_list
+            row = next((r for r in listing(lab.sbx("slice_list")["slices"]) if r["name"] == name), {})
+            runs[offset] = {"reset_tick": start, "last_reset": row.get("last_reset"), "last_error": row.get("last_error")}
+            if row.get("last_reset") != start or row.get("last_error"):
+                return Result(False, f"the reset at tick {start} did not run: last_reset {row.get('last_reset')}, "
+                                     f"last_error {row.get('last_error')}", data=round_all({"runs": runs}))
+            reads = window(lab, arms.read, warmup=WARMUP - (lab.tick() - start))
+            runs[offset]["rates"] = rates(reads[0]["slice"], reads[1]["slice"])
     first, second = (runs[o]["rates"] for o in F4_OFFSETS)
     items = set(first["net"]) | set(second["net"])
     table = compare(first, second, items)
@@ -334,6 +392,7 @@ def fid_f4(lab):
         if table[item]["error"] > TOLERANCE or table[item]["inplace"] <= 0:
             bad.append(f"{item} {table[item]['slice']} vs {table[item]['inplace']}")
     data = round_all({"offsets": list(F4_OFFSETS), "reset_ticks": {o: r["reset_tick"] for o, r in runs.items()},
+                      "last_reset": {o: r["last_reset"] for o, r in runs.items()},
                       "net": {i: {"offset3": c["slice"], "offset7": c["inplace"], "error": c["error"]}
                               for i, c in table.items()}})
     if bad:
@@ -354,30 +413,39 @@ def fid_f5(lab):
     padded = [[area[0][0] - MARGIN, area[0][1] - MARGIN], [area[1][0] + MARGIN, area[1][1] + MARGIN]]
     with Arms(lab, padded, tag="m", other=None) as arms:
         queries = {"slice": (arms.queries["slice"][0], area), "base": ("nauvis", area)}
+        boxes = {"slice": arms.names["slice"]}
         build = arms.summary()["slice"]
-        previous = read(lab, queries)
-        per_minute, diverged = [], None
+        previous = read(lab, queries, boxes)
+        per_minute, diverged, ended = [], None, None
         for minute in range(F5_CAP_MINUTES):
-            lab.advance(3600)
-            now = read(lab, queries)
+            step(lab, 3600)
+            now = read(lab, queries, boxes)
             mine, base = rates(previous["slice"], now["slice"]), rates(previous["base"], now["base"])
-            row = {"minute": minute, "slice": sum(mine["net"].get(i, 0.0) for i in module["products"]),
-                   "base": sum(base["net"].get(i, 0.0) for i in module["products"])}
-            row["error"] = relative(row["slice"], row["base"])
-            row["products"] = compare(mine, base, module["products"], labels=("slice", "base"))
+            table = compare(mine, base, module["products"], key="produced", labels=("slice", "base"))
+            row = {"minute": minute, "products": table, "error": max(c["error"] for c in table.values()),
+                   "slice": sum(mine["produced"].get(i, 0.0) for i in module["products"]),
+                   "base": sum(base["produced"].get(i, 0.0) for i in module["products"])}
             per_minute.append(row)
-            if diverged is None and row["error"] > TOLERANCE:
+            if row["base"] <= 0:
+                ended = minute
+                break
+            if row["error"] > TOLERANCE:
                 diverged = minute
                 break
             previous = now
-    score = diverged if diverged is not None else F5_CAP_MINUTES
+    area_data = {"area": padded, "slice": build, "per_minute": per_minute}
     if per_minute[0]["base"] <= 0:
         return Result(False, "the module makes nothing on untouched nauvis in minute 0, so there is no rate to compare",
-                      data=round_all({"area": padded, "per_minute": per_minute}))
-    data = round_all({"area": padded, "slice": build, "diverged_minute": diverged, "per_minute": per_minute})
-    ok = score >= 1
-    return Result(ok, f"diverged in minute {diverged}" if diverged is not None else f"no divergence in {F5_CAP_MINUTES} min",
-                  score=float(score), data=data)
+                      data=round_all(area_data))
+    score = diverged if diverged is not None else ended if ended is not None else F5_CAP_MINUTES
+    data = round_all({**area_data, "diverged_minute": diverged, "base_stopped_minute": ended})
+    if diverged is not None:
+        detail = f"diverged in minute {diverged}: worst product error {per_minute[-1]['error']:.4f}"
+    elif ended is not None:
+        detail = f"agreed for {ended} min, then the module made nothing on untouched nauvis"
+    else:
+        detail = f"no divergence in {F5_CAP_MINUTES} min"
+    return Result(score >= 1, detail, score=float(score), data=data)
 
 
 def drain_run(lab, module, other):
@@ -385,8 +453,8 @@ def drain_run(lab, module, other):
 
     There is no god warm-up, so both arms start the drain from the same cloned stock.
 
-    The energy interfaces stay (power="keep"), so the module drains its stock instead of freezing. A minute with
-    no product on both arms ends the run, at most DRAIN_CAP_MINUTES after the switch.
+    The energy interfaces stay (power="keep"), so the module drains its stock instead of freezing. Three minutes
+    in a row with no product on either arm end the run, at most DRAIN_CAP_MINUTES after the switch.
     """
     with Arms(lab, module["area"], other=other) as arms:
         if arms.unhandled():
@@ -394,18 +462,20 @@ def drain_run(lab, module, other):
         ledger = {a: lab.sbx("ledger", name=n)["count"] for a, n in arms.names.items()}
         for name in arms.names.values():
             lab.sbx("sbx_mode", name=name, mode="standard", research="keep", power="keep")
-        reads = [read(lab, arms.queries)]
-        minutes = []
+        reads = [arms.read()]
+        minutes, idle = [], 0
         for minute in range(DRAIN_CAP_MINUTES):
-            lab.advance(3600)
-            reads.append(read(lab, arms.queries))
+            step(lab, 3600)
+            reads.append(arms.read())
             row = {arm: rates(reads[-2][arm], reads[-1][arm]) for arm in arms.names}
             minutes.append(row)
-            if all(row[arm]["produced"].get(i, 0.0) < MADE_NOTHING for arm in row for i in module["products"]):
+            made = any(row[arm]["produced"].get(i, 0.0) >= MADE_NOTHING for arm in row for i in module["products"])
+            idle = 0 if made else idle + 1
+            if idle >= DRAIN_IDLE_MINUTES:
                 break
     whole = {arm: rates(reads[0][arm], reads[-1][arm]) for arm in arms.names}
     return {"slice": whole["slice"], "inplace": whole["inplace"], "minutes": minutes, "ledger": ledger,
-            "stock_at_switch": {arm: reads[0][arm]["stock"] for arm in arms.names}, "stopped": len(minutes) < DRAIN_CAP_MINUTES}
+            "stock_at_switch": {arm: reads[0][arm]["stock"] for arm in arms.names}, "stopped": idle >= DRAIN_IDLE_MINUTES}
 
 
 def drain_table(run, products):
@@ -434,12 +504,14 @@ def fid_f9b(lab):
     """
     lab = sized(lab)
     module = next(m for m in corpus() if m["id"] == "redgreen")
+    # the control goes first: the in-place arm drains the real module, and a slice cloned after it would start empty
+    control_run = drain_run(lab, module, "later")
+    control = drain_table(control_run, module["products"]) if "unhandled" not in control_run else control_run
+    restart(lab)
     run = drain_run(lab, module, "inplace")
     if "unhandled" in run:
         return Result(False, f"unhandled ports {run['unhandled']}")
     main = drain_table(run, module["products"])
-    control_run = drain_run(lab, module, "later")
-    control = drain_table(control_run, module["products"]) if "unhandled" not in control_run else control_run
     bad = [f"{i} total {c['slice']:.1f} vs {c['inplace']:.1f}" for i, c in main["totals"].items()
            if c["error"] > TOLERANCE or c["inplace"] <= 0]
     if not main["stopped"]:
@@ -489,6 +561,13 @@ def fid_f6(lab):
         for seed in COMBAT_SEEDS:
             trials[key].append(combat_trial(lab, arm, seed))
     summary, bad = {}, []
+    cleared = {key: [t.get("cleared") is not None for t in runs] for key, runs in trials.items()}
+    if not all(cleared["full"]):
+        bad.append(f"full-world trials that did not clear in {COMBAT_CAP} ticks: seeds "
+                   f"{[i + 1 for i, c in enumerate(cleared['full']) if not c]}")
+    timed_out = [i + 1 for i, c in enumerate(cleared["slice"]) if not c]
+    if timed_out:
+        bad.append(f"slice trials that did not clear in {COMBAT_CAP} ticks: seeds {timed_out}")
     for metric in ("cleared", "lost"):
         cells = {key: [t.get(metric, COMBAT_CAP) for t in runs] for key, runs in trials.items()}
         low, high = min(cells["full"]), max(cells["full"])

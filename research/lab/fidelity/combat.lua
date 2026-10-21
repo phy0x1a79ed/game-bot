@@ -12,6 +12,7 @@ local P = FID
 local nest = P.nest
 fid.p = P
 fid.lost, fid.given, fid.placed, fid.stage = 0, 0, 0, 0
+fid.mine = {}
 fid.centre = {x = P.from.x, y = P.from.y}
 fid.next = P.t0
 fid.cleared, fid.err, fid.step = nil, nil, nil
@@ -55,7 +56,11 @@ local function place_group(target)
       local a = math.atan2(-uy, -ux)
       local t = surf().create_entity{name = "gun-turret", position = pos, force = P.force,
                                    direction = DIRECTIONS[math.floor(a / (2 * math.pi) * 8 + 0.5) % 8 + 1]}
-      if t then fid.placed = fid.placed + 1 top_up(t) end
+      if t then
+        fid.placed = fid.placed + 1
+        fid.mine[t.unit_number] = true
+        top_up(t)
+      end
     end
   end
   fid.centre = {x = cx, y = cy}
@@ -100,9 +105,7 @@ end
 
 script.on_event(defines.events.on_entity_died, function(ev)
   local e = ev.entity
-  if e.valid and e.name == "gun-turret" and e.force.name == P.force and e.surface.name == P.surface then
-    fid.lost = fid.lost + 1
-  end
+  if e.valid and e.unit_number and fid.mine[e.unit_number] then fid.lost = fid.lost + 1 end
 end)
 
 fid.on_tick = function(tick)
