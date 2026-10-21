@@ -143,6 +143,10 @@ Each verb takes `name`, the sandbox.
 
 - `attach(lab)` and `detach(lab, missing_ok=False)`. `Lab.up(camera=True)` and `Lab.down` call them. The camera container is `<lab container>-cam` with labels `fxlab=1` and `fxlab.role=camera`. The lease does not count it.
 - `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG under the lab's `script-output`, returned once the file stops growing. `frame(area, zoom)` gives the position and pixel size `render` will use.
+- `attach` writes `camera.marker` in the lab dir. `render` re-attaches a lost camera only when the marker names the running lab container, and otherwise raises, so a render never adds a camera to a run that had none.
+- `desyncs(lab)` lists desync lines in the camera and server logs. A fidelity arm with a camera must check it, and must check that `fxcam` is still connected.
+- **CAUTION** Files the game writes into `script-output` are owned by root on the host. Delete them with `docker exec <lab> rm`.
+- The sprite atlas caches mount read-only into every camera, so cameras can run side by side.
 - A fixture that needs the seeded save takes `source = "run4-closeout"`, takes that lab down, and brings it up again on `run4-closeout+cam`. It holds one lease slot at a time.
 - `seed(save) -> str`: writes `<save>+cam` into `~/.cache/fxlab/_saves/`, with the camera player already in the save and parked in its booth. Start every arm of a fidelity comparison from the seeded save.
 - CLI: `fxlab.sh seed-camera <save>` and `fxlab.sh shot <lab> ...`, registered through `camera.register(sub)`.
