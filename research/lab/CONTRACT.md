@@ -219,6 +219,10 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 
 A JSON list. Each entry: `id`, `save`, `area` as `[[x0, y0], [x1, y1]]`, `products` (the item names that count as output), `notes`. Every entry slices with no unhandled ports.
 
+`research/lab/fidelity/f1.json` records the hub's last `fid_f1` run: `{ok, commit, stamp, modules = {id: {ok, error}}}`, where `error` is the worst relative product error between the slice and the in-place arm. The hub rewrites it after each `fidelity` run, so a bench record states which slicing code its accuracy claim rests on.
+
+- **CAUTION** Compare arms only from one cloned state. A god warm-up spreads intermediates differently on each surface, so a later switch to standard starts the arms from different stock. F9b switches both arms right after the build and gates the total each product makes from the finite stock.
+
 ### Bench record (`bench.py`, fxlab-bench)
 
 `bench()` returns, and the design library stores, one JSON object:
@@ -231,7 +235,7 @@ A JSON list. Each entry: `id`, `save`, `area` as `[[x0, y0], [x1, y1]]`, `produc
 - `ceiling`: per item, the recipe ceiling per minute.
 - `starved`: the ports that ran empty: the slice flagged the port `starved`, its closer is gone, or its belt tile was empty at the last sample.
 - `unhandled`: always empty, because the bench refuses a slice with unhandled ports.
-- `fidelity`: the corpus id and F1 result of the setup it ran on.
+- `fidelity`: `{corpus, f1}`. `corpus` is the corpus id when the area is a corpus entry. `f1` is the hub's last F1 verdict on the slicing code, read from `research/lab/fidelity/f1.json`: `{ok, commit, stamp}`, plus `module` (that entry's verdict and worst error) for a corpus area. `null` when no record exists.
 
 A blueprint subject takes `ports` in the blueprint entities' own frame, so the `slice_ports` output of the source rect works as it is. A stamped design starts with empty belts and buffers: give it about 8 minutes of warm-up.
 - `commit`, `stamp`.

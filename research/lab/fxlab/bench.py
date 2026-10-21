@@ -16,6 +16,7 @@ from .lab import SbxError
 
 HERE = Path(__file__).resolve().parent
 CORPUS = HERE.parent / "fidelity" / "modules.json"
+F1_RECORD = HERE.parent / "fidelity" / "f1.json"
 TICKS_PER_MIN = 3600
 BELT_TYPES = ["transport-belt", "underground-belt", "splitter", "loader", "loader-1x1", "linked-belt"]
 
@@ -302,6 +303,17 @@ def _corpus_id(area):
     return None
 
 
+def _f1(corpus_id):
+    """The last hub F1 verdict for the slicing code: whole-corpus pass, plus this module's error when it is in the corpus."""
+    if not F1_RECORD.exists():
+        return None
+    rec = json.loads(F1_RECORD.read_text())
+    out = {"ok": rec["ok"], "commit": rec["commit"], "stamp": rec["stamp"]}
+    if corpus_id in rec["modules"]:
+        out["module"] = rec["modules"][corpus_id]
+    return out
+
+
 def _save_of(lab):
     saves = sorted(p.stem for p in lab.saves.glob("*.zip"))
     return ("create" if saves[0] == "world" else saves[0]) if len(saves) == 1 else None
@@ -421,7 +433,7 @@ def bench(lab, area=None, save=None, blueprint=None, ports=None, minutes=10, war
         "minutes": minutes,
         **measured,
         "unhandled": [],
-        "fidelity": {"corpus": None if blueprint is not None else _corpus_id(area), "f1": None},
+        "fidelity": {"corpus": (cid := None if blueprint is not None else _corpus_id(area)), "f1": _f1(cid)},
         "commit": _commit(),
         "stamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
