@@ -135,7 +135,7 @@ def ready(lab):
     """Load the build tools, or say why the lab cannot. Returns the skip Result or None."""
     version = lab.lua('rcon.print(script.active_mods["game-bot-control"])').strip()
     if tuple(int(p) for p in version.split(".")) < (0, 6, 1):
-        return Result(True, f"skipped: game-bot-control {version} has no tool registry; set FXLAB_GBC_MOD")
+        return Result(False, f"game-bot-control {version} has no tool registry; set FXLAB_GBC_MOD")
     tools.sync(lab, names=BUILD)
     return None
 
@@ -155,6 +155,24 @@ def rcon_ms(lab, n=20):
         lab.lua("rcon.print(1)")
         times.append((time.perf_counter() - t0) * 1000)
     return statistics.median(times)
+
+
+def engine_ms(lab, name, args, n=10, rounds=3):
+    """The game's own milliseconds for one call of a tool: n calls inside one RCON command, less one call, over n - 1.
+
+    The server runs a command in one tick, so the frame and the reply transfer cancel out. The best of `rounds` rounds
+    is returned, because other labs on the box only ever add time.
+    """
+    src = json.dumps(args)
+
+    def run(count):
+        code = (f'local a = helpers.json_to_table([==[{src}]==]) for i = 1, {count} do '
+                f'remote.call("game_bot", "tool_call", {{name = "{name}", args = a}}) end rcon.print(1)')
+        t0 = time.perf_counter()
+        lab.lua(code)
+        return (time.perf_counter() - t0) * 1000
+
+    return min((run(n) - run(1)) / (n - 1) for _ in range(rounds))
 
 
 def codes(entry):
@@ -191,8 +209,7 @@ def run_check(lab, case, tag):
     if "all_ok" in case:
         if not res["ok"]:
             fails.append(res["summary"])
-        times = [call(lab, "check", surface=surface, list=entries)[1] for _ in range(20)]
-        ms = statistics.median(times)
+        ms = engine_ms(lab, "check", {"surface": surface, "list": entries})
     else:
         fails += judge(res, case["expect"])
     base = rcon_ms(lab)
@@ -506,6 +523,15 @@ def build_bad_args(lab):
         "route end outside": ("route", route_args(s, (0, 0), (30, 3), (0, 0, 10, 10))),
         "route unknown belt": ("route", route_args(s, (0, 0), (3, 3), (0, 0, 10, 10), belt="no-such-belt")),
         "route diagonal flow": ("route", route_args(s, (0, 0), (3, 3), (0, 0, 10, 10), start_flow=[1, 1])),
+        "check too many entries": ("check", {"surface": s, "list": [chest(0.5 + i, 0.5) for i in range(201)]}),
+        "check surface a table": ("check", {"surface": {"a": 1}, "list": good}),
+        "check force a table": ("check", {"surface": s, "force": {"a": 1}, "list": good}),
+        "check name a table": ("check", {"surface": s, "list": [{"name": {"a": 1}, "position": [0, 0]}]}),
+        "place surface a table": ("place", {"surface": [1], "list": good}),
+        "route surface a table": ("route", route_args({"a": 1}, (0, 0), (3, 3), (0, 0, 10, 10))),
+        "route force a table": ("route", route_args(s, (0, 0), (3, 3), (0, 0, 10, 10), force={"a": 1})),
+        "route belt a table": ("route", route_args(s, (0, 0), (3, 3), (0, 0, 10, 10), belt={"a": 1})),
+        "route box 49 wide": ("route", route_args(s, (0, 0), (3, 3), (0, 0, 48, 10))),
     }
     out, bad = {}, []
     for label, (name, args) in tries.items():
@@ -520,6 +546,10 @@ def build_bad_args(lab):
     odd = tools.call(lab, "check", surface=s, list=[{"name": "iron-chest", "position": ["a", "b"]}])
     if odd.get("ok") is not False or codes(lst(odd["entries"])[0]) != ["BAD_INTENT"]:
         bad.append(f"check position text: {json.dumps(odd)[:120]}")
+    for name in ("entity-ghost", "iron-ore", "character"):
+        r = tools.call(lab, "check", surface=s, list=[ent(name, 0.5, 0.5)])
+        if r.get("ok") is not False or codes(lst(r["entries"])[0]) != ["BAD_INTENT"]:
+            bad.append(f"check {name}: {json.dumps(r)[:120]}")
     errors = {t["name"]: t["errors"] for t in tools.listing(lab) if t["name"] in BUILD}
     ok = not bad and not any(errors.values())
     return finish(lab, ok, f"{len(tries) - len(bad)} of {len(tries)} answered {{error, hint}}; tool errors {errors}"
@@ -687,6 +717,8 @@ def build_check_run4_false_positives(lab):
                                 f"COUNT = 50\nBELTS = 24\nTYPES = {json.dumps(list(COPY_TYPES)).replace('[', '{').replace(']', '}')}\n" + COPY_OUT))
     entries = lst(copied["list"])
     res, ms = call(lab, "check", list=entries)
+    if "entries" not in res:
+        return Result(False, f"check answered {res}")
     failing = [(i + 1, entries[i], r) for i, r in enumerate(lst(res["entries"])) if lst(r.get("issues"))]
     by_code = {}
     for i, e, r in failing:
@@ -831,3 +863,53 @@ def build_place_robots_build(lab):
     return finish(lab, ok, f"spot ({ox}, {oy}); {res['summary']}; ghosts left {state['ghosts']} after {ticks} ticks "
                            f"({time.time() - t0:.0f} s); built {len(built)} of {len(want)}; arms ok {arms_ok}; undergrounds {ugs} "
                            f"linked {linked}; recipe {recipe}; warn {res.get('warn')}", {"ticks": ticks, "spot": [ox, oy]})
+
+
+CAP_MS = 20
+
+
+def cap_lists():
+    """The largest lists check accepts: 200 entries, mixed with a 50-pole chain, and 200 pipe-to-ground ends."""
+    mixed = [belt(-59.5 + i, -49.5, [1, 0]) for i in range(60)]
+    mixed += [ent("small-electric-pole", -52.5 + 7 * (i % 16), -59.5 + 7 * (i // 16)) for i in range(50)]
+    for i in range(45):
+        mixed += [chest(-59.5 + 2 * i, -34.5), ins(-59.5 + 2 * i, -33.5, [0, 1])]
+    mixed += [chest(-59.5 + i, -28.5) for i in range(200 - len(mixed))]
+    pipes = [x for j in range(100) for x in (ptg(-59.5 + 12 * (j % 5), -59.5 + 2 * (j // 5), [1, 0]),
+                                             ptg(-54.5 + 12 * (j % 5), -59.5 + 2 * (j // 5), [-1, 0]))]
+    return {"mixed": mixed, "underground pipes": pipes}
+
+
+@fixture(source="create", tags={"tools", "build"}, camera=True)
+def build_cost_at_caps(lab):
+    """A call runs in one tick on every peer, so each build tool must stay near 20 ms of engine time at its caps."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    surface = world(lab, "cost", 'mk(s, {name = "small-electric-pole", position = {-59.5, -59.5}})')
+    times, notes = {}, []
+    for label, entries in cap_lists().items():
+        assert len(entries) == 200, (label, len(entries))
+        res = tools.call(lab, "check", surface=surface, list=entries)
+        times[f"check {label}"] = engine_ms(lab, "check", {"surface": surface, "list": entries})
+        if label == "mixed" and (len(lst(res["entries"])) != 200 or any(x["code"] == "POLE_ISLAND" for r in lst(res["entries"])
+                                                                         for x in lst(r.get("issues")))):
+            notes.append("the pole chain was not seen as linked")
+    wall = "".join(f'mk(s, {{name = "iron-chest", position = {{{x + 0.5}, {y + 0.5}}}}})\n' for x in range(36, 45) for y in range(48))
+    box = (0, 0, 47, 47)
+    shut = world(lab, "cost-shut", wall)
+    args = route_args(shut, (2, 24), (46, 24), box)
+    answer = tools.call(lab, "route", **args)
+    if "error" not in answer:
+        notes.append("the unreachable route answered a path")
+    times["route unreachable 48x48"] = engine_ms(lab, "route", args, n=5)
+    ring = "".join(f'mk(s, {{name = "iron-chest", position = {{{x + 0.5}, {y + 0.5}}}}})\n'
+                   for x in range(30, 47) for y in range(10, 27) if x < 35 or x > 41 or y < 15 or y > 21)
+    sealed = world(lab, "cost-ring", ring)
+    args = route_args(sealed, (2, 40), (38, 18), box)
+    tools.call(lab, "route", **args)
+    times["route goal walled in"] = engine_ms(lab, "route", args, n=5)
+    over = [k for k, v in times.items() if v > CAP_MS]
+    detail = "; ".join(f"{k} {v:.1f} ms" for k, v in times.items()) + (f"; over {CAP_MS} ms: {over}" if over else "")
+    return finish(lab, not over and not notes, detail + ("; " + "; ".join(notes) if notes else ""),
+                  {k: round(v, 1) for k, v in times.items()})
