@@ -7,7 +7,7 @@ from ..lab import SbxError
 from .registry import Result, fixture
 from .slice import RED_GREEN
 
-RECORD_KEYS = {"subject", "mode", "warmup_min", "minutes", "ticks", "rates", "utilisation", "ceiling", "starved",
+RECORD_KEYS = {"subject", "mode", "power", "warmup_min", "minutes", "ticks", "rates", "utilisation", "ceiling", "starved",
                "unhandled", "fidelity", "commit", "stamp"}
 
 
@@ -67,26 +67,63 @@ def bench_refuses_unhandled(lab):
     return Result(False, "the bench rated a slice with an unhandled port")
 
 
+PRODUCTS = ("automation-science-pack", "logistic-science-pack")
+
+
 @fixture(source="run4-closeout", tags={"bench", "slow"})
 def bench_standard(lab):
-    """Standard mode makes no more than god mode on the red/green block, and its supply is cut by the end."""
+    """On its own stock the red/green block makes some science but no more than in god mode, and its cut feeds are starved.
+
+    Only the two science packs are compared: the net rate of an intermediate is buffer noise that can read positive.
+    """
     from .. import bench
+    feeds = [p["position"] for p in _derived_ports(lab, RED_GREEN) if p["role"] == "feed"]
     t0 = time.time()
     god = bench.bench(lab, RED_GREEN, minutes=3, warmup=1, mode="god")
     t1 = time.time()
     std = bench.bench(lab, RED_GREEN, minutes=3, warmup=1, mode="standard")
     t2 = time.time()
-    over = {n: (v, god["rates"].get(n, 0)) for n, v in std["rates"].items() if v > god["rates"].get(n, 0) + 0.01}
-    data = {"god": god["rates"], "standard": std["rates"], "starved": std["starved"], "god_starved": god["starved"],
-            "mode": std["mode"],
+    outputs = {n: v for n, v in std["rates"].items() if v > 0 and n in PRODUCTS}
+    god_outputs = {n: v for n, v in god["rates"].items() if v > 0 and n in PRODUCTS}
+    named = [[p["position"]["x"], p["position"]["y"]] for p in std["starved"]]
+    data = {"god": god_outputs, "standard": std["rates"], "starved": std["starved"], "god_starved": god["starved"],
+            "mode": std["mode"], "power": std["power"], "feeds": feeds,
             "wall_s": {"god": round(t1 - t0, 1), "standard": round(t2 - t1, 1)}}
-    problems = [f"standard above god: {over}"] if over else []
-    if std["mode"] != "standard":
-        problems.append(f"mode {std['mode']}")
-    if not std["starved"]:
-        problems.append("standard mode starved nothing")
+    problems = _record_problems(std)
+    if std["mode"] != "standard" or std["power"] != "keep":
+        problems.append(f"mode {std['mode']}, power {std['power']}")
+    if not outputs:
+        problems.append("standard mode made no positive output")
+    over = {n: (v, god_outputs.get(n, 0)) for n, v in outputs.items() if v > 1.02 * god_outputs.get(n, 0)}
+    if over:
+        problems.append(f"standard outputs above god outputs: {over}")
+    missing = [f for f in feeds if f not in named]
+    if missing:
+        problems.append(f"cut feeds not named in starved: {missing}")
     return Result(not problems, "; ".join(problems) or
-                  f"standard {json.dumps(std['rates'])} vs god {json.dumps(god['rates'])}, starved {len(std['starved'])}",
+                  f"standard outputs {json.dumps(outputs)} against god {json.dumps(god_outputs)}, "
+                  f"starved {named}", data=data)
+
+
+SMELTING = [[0, -49], [16, -28]]
+
+
+@fixture(source="run4-closeout", tags={"bench"})
+def bench_smelting(lab):
+    """A column of 12 furnaces benches without error: plates out, ore in, a furnace recipe in the utilisation."""
+    from .. import bench
+    r = bench.bench(lab, SMELTING, minutes=3, warmup=2)
+    plates = r["rates"].get("iron-plate", 0)
+    data = {"rates": r["rates"], "utilisation": r["utilisation"], "ceiling": r["ceiling"], "starved": r["starved"]}
+    problems = _record_problems(r)
+    if plates <= 0 or r["rates"].get("iron-ore", 0) >= 0:
+        problems.append(f"iron-plate {plates}/min and iron-ore {r['rates'].get('iron-ore')}/min: expected plates out, ore in")
+    if plates > 1.005 * r["ceiling"].get("iron-plate", 0):
+        problems.append(f"iron-plate {plates} above its ceiling {r['ceiling'].get('iron-plate')}")
+    if "iron-plate" not in r["utilisation"]:
+        problems.append("no furnace recipe in the utilisation")
+    return Result(not problems, "; ".join(problems) or
+                  f"iron-plate {plates}/min of {r['ceiling']['iron-plate']}, utilisation {r['utilisation']['iron-plate']}",
                   data=data)
 
 
