@@ -5,7 +5,9 @@ once the save already holds it (see `seed`). A first join into an unseeded save 
 shifts unit numbers. The camera container is not a lab server, so the lease does not count it.
 """
 
+import itertools
 import math
+import secrets
 import shutil
 import struct
 import subprocess
@@ -22,6 +24,9 @@ PX_PER_TILE = 32
 MAX_SIDE = 4096
 CLIENT_GONE = ("WaitingForUserToSaveOrQuitAfterServerLeft", "Quitting multiplayer connection")
 JOINS = {}  # lab container -> seconds the last attach took to reach InGame
+DESYNC_MARKS = ("desync", "multiplayermanager failed", "received unexpected", "dropped", "crc mismatch",
+                "keep up with the server")
+SHOTS = itertools.count(1)
 
 
 def container(lab):
@@ -41,13 +46,22 @@ def _running(name):
     return docker("inspect", "-f", "{{.State.Running}}", name, check=False).strip() == "true"
 
 
+def _marker(lab):
+    return lab.dir / "camera.marker"
+
+
+def _lab_id(lab):
+    return docker("inspect", "-f", "{{.Id}}", lab.container, check=False).strip()
+
+
 def _cache_mounts():
+    """Sprite caches mount read-only, so two cameras never race on a write. Mesa's shader cache is multi-process safe."""
     CACHE.mkdir(parents=True, exist_ok=True)
     (CACHE / "mesa_shader_cache").mkdir(exist_ok=True)
     mounts = ["-v", f"{CACHE / 'mesa_shader_cache'}:/root/.cache/mesa_shader_cache"]
     for name in ("atlas-cache.dat", "crop-cache.dat"):
         if (CACHE / name).exists():
-            mounts += ["-v", f"{CACHE / name}:/opt/factorio/{name}"]
+            mounts += ["-v", f"{CACHE / name}:/opt/factorio/{name}:ro"]
     return mounts
 
 
@@ -59,26 +73,30 @@ def attach(lab, timeout=300):
     """
     cam, net = container(lab), network(lab)
     docker("rm", "-f", cam, check=False)
+    _marker(lab).unlink(missing_ok=True)
     docker("network", "create", "--label", "fxlab=1", net, check=False)
-    docker("network", "connect", net, lab.container, check=False)
-    # the camera needs the lab's mods and its script-output (the client writes the PNGs), not its saves
-    mods = [m for m in lab.mounts()[1::2]
-            if m.split(":")[1].startswith(("/opt/factorio/mods", "/opt/factorio/script-output"))]
-    t0 = time.time()
-    docker("run", "-d", "--name", cam, "--label", "fxlab=1", "--label", "fxlab.role=camera",
-           "--network", net, "--cpus", "2", "--memory", "4g",
-           "-e", "FACTORIO_ROLE=seat", "-e", f"SEAT_NAME={PLAYER}", "-e", f"FACTORIO_HOST={lab.container}",
-           "-e", f"FACTORIO_PORT={GAME_PORT}", "-e", "SEAT_UNMAP=1",
-           *[x for m in mods for x in ("-v", m)],
-           "-v", f"{CONFIG}:/opt/factorio/config/config.ini:ro", *_cache_mounts(), IMAGE)
-    while "to(InGame)" not in _logs(cam):
-        if time.time() - t0 > timeout or not _running(cam):
-            tail = _logs(cam, 40)
-            detach(lab, missing_ok=True)
-            raise RuntimeError(f"camera did not reach InGame:\n{tail}")
-        time.sleep(0.25)
-    JOINS[lab.container] = round(time.time() - t0, 1)
-    _park(lab, deadline=t0 + timeout)
+    try:
+        docker("network", "connect", net, lab.container, check=False)
+        # the camera needs the lab's mods and its script-output (the client writes the PNGs), not its saves
+        mods = [m for m in lab.mounts()[1::2]
+                if m.split(":")[1].startswith(("/opt/factorio/mods", "/opt/factorio/script-output"))]
+        t0 = time.time()
+        docker("run", "-d", "--name", cam, "--label", "fxlab=1", "--label", "fxlab.role=camera",
+               "--network", net, "--cpus", "2", "--memory", "4g",
+               "-e", "FACTORIO_ROLE=seat", "-e", f"SEAT_NAME={PLAYER}", "-e", f"FACTORIO_HOST={lab.container}",
+               "-e", f"FACTORIO_PORT={GAME_PORT}", "-e", "SEAT_UNMAP=1",
+               *[x for m in mods for x in ("-v", m)],
+               "-v", f"{CONFIG}:/opt/factorio/config/config.ini:ro", *_cache_mounts(), IMAGE)
+        while "to(InGame)" not in _logs(cam):
+            if time.time() - t0 > timeout or not _running(cam):
+                raise RuntimeError(f"camera did not reach InGame:\n{_logs(cam, 40)}")
+            time.sleep(0.25)
+        JOINS[lab.container] = round(time.time() - t0, 1)
+        _park(lab, deadline=t0 + timeout)
+    except BaseException:
+        detach(lab, missing_ok=True)
+        raise
+    _marker(lab).write_text(_lab_id(lab))
     return JOINS[lab.container]
 
 
@@ -101,13 +119,29 @@ def detach(lab, missing_ok=False):
     docker("rm", "-f", cam, check=False)
     docker("network", "disconnect", "-f", net, lab.container, check=False)
     docker("network", "rm", net, check=False)
+    _marker(lab).unlink(missing_ok=True)
 
 
 def ensure(lab):
-    """Recreate the camera when its container is gone or its client left the game."""
+    """Recreate the camera when its container is gone or its client left the game, if this lab ever had one."""
     cam = container(lab)
-    if not _running(cam) or any(mark in _logs(cam, 60) for mark in CLIENT_GONE):
-        attach(lab)
+    if _running(cam) and not any(mark in _logs(cam, 60) for mark in CLIENT_GONE):
+        return
+    marker = _marker(lab)
+    if not marker.exists() or marker.read_text() != _lab_id(lab):
+        raise RuntimeError("lab has no camera; start it with camera=True")
+    attach(lab)
+
+
+def desyncs(lab):
+    """Log lines of the camera client and the server that name a desync or a drop of the camera."""
+    seen = []
+    for name in (container(lab), lab.container):
+        res = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
+        for line in (res.stdout + res.stderr).splitlines():
+            if any(mark in line.lower() for mark in DESYNC_MARKS):
+                seen.append(f"{name}: {line.strip()}")
+    return seen
 
 
 def png_size(path):
@@ -134,6 +168,10 @@ def _wait_png(path, timeout):
     raise RuntimeError(f"no screenshot at {path} after {timeout:.0f}s")
 
 
+def _nonce():
+    return f"{next(SHOTS)}-{secrets.token_hex(3)}"
+
+
 def frame(area, zoom=1):
     """The centre and pixel resolution that fill the frame with `area` at `zoom`, each side capped at 4096."""
     (x0, y0), (x1, y1) = area if len(area) == 2 else ((area[0], area[1]), (area[2], area[3]))
@@ -151,8 +189,11 @@ def render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, 
     elif position is None:
         raise ValueError("render needs area or position")
     ensure(lab)
+    path = f"fxlab/shot-{lab.tick()}-{_nonce()}.png"
+    # the lab server writes script-output as root, so only it can delete a leftover
+    docker("exec", lab.container, "rm", "-f", f"/opt/factorio/script-output/{path}")
     r = lab.sbx("view_shot", surface=surface, position=list(position), zoom=zoom, info=bool(info),
-                resolution=list(resolution or (1280, 720)))
+                resolution=list(resolution or (1280, 720)), path=path)
     return _wait_png(lab.output / r["path"], timeout)
 
 
