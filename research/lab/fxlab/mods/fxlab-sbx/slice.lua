@@ -5,7 +5,8 @@
 -- storage.slice[name] = {area, big (area plus the overhang of cloned entities), source, ports_data (what a closer is
 -- built from), ports and unhandled (as reported), rails, rec (belts, fluids and roboport energy the freeze cannot
 -- hold), fp (the snapshot fingerprint), closer_ids and closer_ents (every entity a closer placed), feeds and drains
--- (scripted closers), evo, pollution, reset_at, inplace}.
+-- (scripted closers), evo, pollution, trains (manual_mode and speed of the source trains), reset_at, last_error,
+-- inplace}.
 local sbx = require("sbx")
 local M = {remote = {}}
 
@@ -227,6 +228,31 @@ local function belt_lines(e)
   return #out > 0 and table.concat(out, ";") or nil
 end
 
+local FP_WIRES = {[defines.wire_connector_id.circuit_red] = true, [defines.wire_connector_id.circuit_green] = true,
+  [defines.wire_connector_id.pole_copper] = true}
+
+-- the red, green and copper wires of `e`, each as the connector id and the far end's name, position and connector id
+local function wire_keys(e)
+  local conns = e.get_wire_connectors(false)
+  if not conns then return nil end
+  local out
+  for _, c in pairs(conns) do
+    if FP_WIRES[c.wire_connector_id] then
+      for _, w in ipairs(c.connections) do
+        local o = w.target.owner
+        if o and o.valid then
+          out = out or {}
+          out[#out + 1] = c.wire_connector_id .. ">" .. o.name .. "@" .. r3(o.position.x) .. "," .. r3(o.position.y)
+            .. ":" .. w.target.wire_connector_id
+        end
+      end
+    end
+  end
+  if not out then return nil end
+  table.sort(out)
+  return table.concat(out, ";")
+end
+
 local function entity_line(e)
   local p = e.position
   local t = e.type
@@ -238,6 +264,8 @@ local function entity_line(e)
   if not e.unit_number then return table.concat(parts, "|") end
   local inv = inventories(e)
   if inv then parts[#parts + 1] = "inv=" .. inv end
+  local wk = wire_keys(e)
+  if wk then parts[#parts + 1] = "wires=" .. wk end
   if IS_BELT[t] then
     local b = belt_lines(e)
     if b then parts[#parts + 1] = "belt=" .. b end
@@ -395,6 +423,27 @@ end
 
 local function pos2(p) return {x = p.x, y = p.y} end
 
+-- what an inserter would carry from `pick`: the items on the belt or in the output inventory, its hand, or else
+-- what the machine it drops into wants
+local function pickup_items(pick, ins, drop)
+  local items = {}
+  local inv = pick and pick.get_output_inventory and pick.get_output_inventory()
+  if pick and IS_BELT[pick.type] then
+    for i = 1, pick.get_max_transport_line_index() do lane_names(pick, i, items) end
+  elseif inv then
+    for _, it in pairs(inv.get_contents()) do items[it.name] = true end
+  end
+  if ins.held_stack.valid_for_read then items[ins.held_stack.name] = true end
+  if not next(items) and drop then for _, it in pairs(wants(drop)) do items[it] = true end end
+  return sorted(items)
+end
+
+local function direction_of(from, to)
+  local dx, dy = to.x - from.x, to.y - from.y
+  if math.abs(dx) > math.abs(dy) then return dx > 0 and D.east or D.west end
+  return dy > 0 and D.south or D.north
+end
+
 -- Every connection that crosses the edge of `area`, as plain data a closer can be built from.
 -- `inside` maps unit numbers of the entities the cut keeps. Returns ports, unhandled, rails and, parallel to
 -- ports, the outside entities each port touches (an in-place cut removes them).
@@ -478,17 +527,7 @@ local function find_ports(src, area, inside)
     if inn(ins) then
       local pick = thing_at(src, ins.pickup_position, ins)
       if pick and pick.unit_number and not inn(pick) then
-        local items = {}
-        local inv = pick.get_output_inventory and pick.get_output_inventory()
-        if IS_BELT[pick.type] then
-          for i = 1, pick.get_max_transport_line_index() do lane_names(pick, i, items) end
-        elseif inv then
-          for _, it in pairs(inv.get_contents()) do items[it.name] = true end
-        end
-        if ins.held_stack.valid_for_read then items[ins.held_stack.name] = true end
-        local drop = thing_at(src, ins.drop_position, ins)
-        if not next(items) and drop then for _, it in pairs(wants(drop)) do items[it] = true end end
-        local list = sorted(items)
+        local list = pickup_items(pick, ins, thing_at(src, ins.drop_position, ins))
         add({how = "inserter-in", kind = "inserter", role = "feed", x = ins.position.x, y = ins.position.y, name = ins.name,
              chest = pos2(ins.pickup_position), items = list, starved = #list == 0 or nil}, {pick})
       end
@@ -496,6 +535,53 @@ local function find_ports(src, area, inside)
       if drop and drop.unit_number and not inn(drop) and drop.type ~= "character" then
         add({how = "inserter-out", kind = "inserter", role = "drain", x = ins.position.x, y = ins.position.y, name = ins.name,
              chest = pos2(ins.drop_position)}, {drop})
+      end
+    end
+  end
+
+  -- inserters and drills outside the rectangle that load into it or unload from it: the cut does not clone them, so
+  -- the closer rebuilds the inserter, or puts an inserter where the drill stood, and closes the far end
+  for _, e in pairs(src.find_entities_filtered{area = pad(area, 3), type = {"inserter", "mining-drill"}}) do
+    if not inn(e) then
+      if e.type == "inserter" then
+        local pick, drop = thing_at(src, e.pickup_position, e), thing_at(src, e.drop_position, e)
+        local pin, din = pick and inn(pick), drop and inn(drop)
+        if pin or din then
+          local filters = {}
+          for i = 1, e.filter_slot_count do filters[i] = e.get_filter(i) end
+          local rec = {how = "ext-inserter", kind = "inserter", role = pin and not din and "drain" or "feed",
+                       x = e.position.x, y = e.position.y, name = e.name,
+                       ins = {name = e.name, x = e.position.x, y = e.position.y, dir = e.direction, filters = filters}}
+          local outer = {e}
+          if din and not pin then
+            rec.chest = pos2(e.pickup_position)
+            rec.items = pickup_items(pick, e, drop)
+            rec.starved = #rec.items == 0 or nil
+            outer[2] = pick
+          elseif pin and not din then
+            rec.chest = pos2(e.drop_position)
+            outer[2] = drop
+          end
+          add(rec, outer)
+        end
+      else
+        local ok, dp = pcall(function() return e.drop_position end)
+        local target = ok and dp and thing_at(src, dp, e)
+        if target and inn(target) then
+          local dir = direction_of(e.position, dp)
+          local tile = {x = math.floor(dp.x) + 0.5, y = math.floor(dp.y) + 0.5}
+          local items = {}
+          local mined = e.mining_target
+          if mined and mined.valid then
+            for _, prod in pairs(mined.prototype.mineable_properties.products or {}) do
+              if prod.type == "item" then items[prod.name] = true end
+            end
+          end
+          local list = sorted(items)
+          add({how = "ext-drill", kind = "inserter", role = "feed", x = e.position.x, y = e.position.y, name = e.name,
+               load = {x = tile.x - V[dir][1], y = tile.y - V[dir][2], dir = dir}, items = list,
+               starved = #list == 0 or nil}, {e})
+        end
       end
     end
   end
@@ -651,6 +737,21 @@ local function close_port(ctx, p)
   elseif how == "inserter-out" then
     if chest_void(ctx, p.chest) then return true end
     return false, "no room for the drop chest"
+  elseif how == "ext-inserter" then
+    local i = p.ins
+    local ins = make(ctx, {name = i.name, position = {i.x, i.y}, direction = i.dir})
+    if not ins then return false, "no room to rebuild the inserter outside the cut" end
+    for slot, f in pairs(i.filters or {}) do ins.set_filter(slot, f) end
+    if p.starved or not p.chest then return true end
+    local chest = p.role == "feed" and chest_source(ctx, p.chest, p.items) or p.role == "drain" and chest_void(ctx, p.chest)
+    if chest then return true end
+    return false, "no room for the chest at the outer end of the inserter"
+  elseif how == "ext-drill" then
+    if p.starved then return true end
+    local l = p.load
+    local ins = make(ctx, {name = "inserter", position = {l.x, l.y}, direction = OPP[l.dir]})
+    if ins and chest_source(ctx, at(l, -1, l.dir), p.items) then return true end
+    return false, "no room for an inserter where the drill stood"
   elseif how == "fluid" or how == "fluid-under" then
     if p.starved then return true end
     local pair
@@ -794,9 +895,53 @@ end}
 
 -- Snapshot and reset ----------------------------------------------------------------------------------------------
 
-local function auto_trains(s)
+-- a clone lands a carriage up to a sixteenth of a tile off its source position, so the key rounds to the tile
+local function carriage_key(c)
+  return c.name .. "@" .. math.floor(c.position.x + 0.5) .. "," .. math.floor(c.position.y + 0.5)
+end
+
+-- manual_mode and speed of every source train that has a carriage in the cut
+local function record_trains(src, inside)
+  local out = {}
+  for _, t in pairs(game.train_manager.get_trains{surface = src}) do
+    local keys, any = {}, false
+    for _, c in pairs(t.carriages) do
+      keys[#keys + 1] = carriage_key(c)
+      if c.unit_number and inside[c.unit_number] then any = true end
+    end
+    if any then out[#out + 1] = {keys = keys, manual = t.manual_mode, speed = t.speed} end
+  end
+  return out
+end
+
+local function hold_trains(s)
   for _, t in pairs(game.train_manager.get_trains{surface = s}) do
-    if t.manual_mode then t.manual_mode = false end
+    t.manual_mode = true
+    t.speed = 0
+  end
+end
+
+-- Put each train back as it was in the source. `trains_auto = false` keeps every train in manual mode, at rest.
+local function restore_trains(s, recs, trains_auto)
+  local by = {}
+  for _, r in ipairs(recs or {}) do
+    for _, k in ipairs(r.keys) do by[k] = by[k] or r end
+  end
+  for _, t in pairs(game.train_manager.get_trains{surface = s}) do
+    local r
+    for _, c in pairs(t.carriages) do
+      r = by[carriage_key(c)]
+      if r then break end
+    end
+    if r then
+      if trains_auto == false then
+        t.manual_mode = true
+        t.speed = 0
+      else
+        t.manual_mode = r.manual
+        t.speed = r.speed
+      end
+    end
   end
 end
 
@@ -868,7 +1013,7 @@ local function bring_up(name, box, S, trains_auto)
   lap("restore")
   restore_fluids(play, S.rec)
   restore_energy(play, S.rec)
-  if trains_auto ~= false then auto_trains(play) end
+  restore_trains(play, S.trains, trains_auto)
   game.forces.enemy.set_evolution_factor(S.evo, play)
   apply_pollution(play, S.pollution)
   lap("close")
@@ -883,6 +1028,8 @@ local function bring_up(name, box, S, trains_auto)
     lap("power")
     local pw = power(name, S, play, sbx.force(box), S.area)
     if pw then S.ports[#S.ports + 1] = pw end
+  else
+    play.destroy_global_electric_network()
   end
   lap("belts")
   restore_segments(play, S.rec)
@@ -923,6 +1070,7 @@ M.remote.slice_build = function(a)
     end
     lap("ports")
     local ports, unhandled, rails, rail_count = find_ports(src, area, inside)
+    local trains = record_trains(src, inside)
     lap("record")
     local rec = record(snap, big)
     lap("freeze")
@@ -941,6 +1089,7 @@ M.remote.slice_build = function(a)
       end
     end
     set_disabled(snap, big, true)
+    hold_trains(snap)
     -- a roboport ignores the freeze: left charged, it keeps dispatching robots on the snapshot
     for _, e in pairs(snap.find_entities_filtered{area = big, type = "roboport"}) do e.energy = 0 end
     for _, e in pairs(snap.find_entities_filtered{area = big, type = BELT_T}) do
@@ -950,7 +1099,7 @@ M.remote.slice_build = function(a)
       if e.unit_number and e.fluids_count > 0 then e.clear_fluid_inside() end
     end
     local S = {area = area, big = big, source = source, rec = rec, ports_data = ports,
-               unhandled_find = unhandled, rails = rails, rail_count = rail_count,
+               unhandled_find = unhandled, rails = rails, rail_count = rail_count, trains = trains,
                evo = game.forces.enemy.get_evolution_factor(src), pollution = record_pollution(src, big),
                missed = missed, missed_report = {cloned = missed, lost = still}, closer_ids = {}, closer_ents = {}}
     state_s[name] = S
@@ -978,6 +1127,7 @@ M.remote.slice_reset = function(a)
   laps_begin()
   bring_up(a.name, box, S, a.trains_auto)
   S.last_reset = game.tick
+  S.last_error = nil
   return {entities = S.entities, ports = #S.ports, unhandled = #S.unhandled, ms = {}}
 end
 
@@ -997,8 +1147,14 @@ M.on_tick = function(ev)
       local box = storage.sbx.boxes[name]
       if box then
         laps_begin()
-        bring_up(name, box, S, S.reset_auto)
-        S.last_reset = ev.tick
+        local ok, err = pcall(bring_up, name, box, S, S.reset_auto)
+        if ok then
+          S.last_reset = ev.tick
+          S.last_error = nil
+        else
+          lap(nil)
+          S.last_error = "tick " .. ev.tick .. ": " .. tostring(err)
+        end
       end
     end
   end
@@ -1076,6 +1232,31 @@ local function power_inplace(name, S, s, force, area, inside)
   return made
 end
 
+-- A rebuilt outside inserter or drill inserter that no pole reaches gets a pole of its own. The pole joins the cut's
+-- network and drops every wire to the world outside, so the energy interface stays the only source.
+local function power_closers(name, S, s, force, inside)
+  for _, e in ipairs(S.closer_ents) do
+    if e.valid and e.type == "inserter" and not e.is_connected_to_electric_network() then
+      local spot = s.find_non_colliding_position("medium-electric-pole", e.position, 2, 0.5)
+      local pole = spot and s.create_entity{name = "medium-electric-pole", position = spot, force = force}
+      if pole then
+        local c = pole.get_wire_connector(defines.wire_connector_id.pole_copper, false)
+        for _, w in ipairs(c and c.connections or {}) do
+          local o = w.target.owner
+          if not (o and o.valid and o.unit_number and inside[o.unit_number]) then c.disconnect_from(w.target, w.origin) end
+        end
+        S.closer_ids[pole.unit_number] = true
+        S.closer_ents[#S.closer_ents + 1] = pole
+        sbx.ledger_add(name, {kind = "entity", entity = pole})
+      end
+      if not (pole and e.is_connected_to_electric_network()) then
+        S.unhandled[#S.unhandled + 1] = {position = pos2(e.position), name = e.name,
+                                         reason = "no pole reaches the rebuilt inserter"}
+      end
+    end
+  end
+end
+
 M.remote.slice_inplace = function(a)
   local area = rect(a.area)
   local source = a.source or "nauvis"
@@ -1109,6 +1290,10 @@ M.remote.slice_inplace = function(a)
     for _, ins in pairs(src.find_entities_filtered{area = pad(area, 4), type = "inserter"}) do
       if not inside[ins.unit_number] and (inrect(area, ins.pickup_position) or inrect(area, ins.drop_position)) then take(ins) end
     end
+    for _, drill in pairs(src.find_entities_filtered{area = pad(area, 4), type = "mining-drill"}) do
+      local ok, dp = pcall(function() return drill.drop_position end)
+      if ok and dp and not inside[drill.unit_number] and inrect(area, dp) then take(drill) end
+    end
     for _, pole in pairs(src.find_entities_filtered{area = pad(area, 12), type = "electric-pole"}) do
       if not inside[pole.unit_number] then
         local linked = false
@@ -1126,14 +1311,20 @@ M.remote.slice_inplace = function(a)
     lap("wires")
     local seen_w = {}
     for _, e in ipairs(stash) do wires_of(e, S.wires, seen_w) end
-    for _, pole in pairs(src.find_entities_filtered{area = area, type = "electric-pole"}) do
-      local c = pole.get_wire_connector(defines.wire_connector_id.pole_copper, false)
-      if c then
-        for _, w in ipairs(c.connections) do
-          local o = w.target.owner
-          if o and o.valid and o.unit_number and not inside[o.unit_number] and not seen[o.unit_number] then
-            wires_of(pole, S.wires, seen_w)
-            c.disconnect_from(w.target, w.origin)
+    -- the copper, red and green wires from the kept entities to anything left outside
+    for _, e in pairs(src.find_entities_filtered{area = area}) do
+      local conns = e.unit_number and e.get_wire_connectors(false)
+      if conns then
+        for _, c in pairs(conns) do
+          if FP_WIRES[c.wire_connector_id] then
+            for _, w in ipairs(c.connections) do
+              local o = w.target.owner
+              if o and o.valid and o.unit_number and not inside[o.unit_number] and not seen[o.unit_number] then
+                S.wires[#S.wires + 1] = {a = ekey(e), aid = c.wire_connector_id, b = ekey(o),
+                                         bid = w.target.wire_connector_id, origin = w.origin}
+                c.disconnect_from(w.target, w.origin)
+              end
+            end
           end
         end
       end
@@ -1142,6 +1333,7 @@ M.remote.slice_inplace = function(a)
     lap("stash")
     S.pre = record(src, pad(area, 24))
     local stash_s = new_surface("fxlab-stash-" .. name)
+    sbx.own_surface(name, stash_s.name)
     for _, f in pairs(game.forces) do f.set_surface_hidden(stash_s, true) end
     local rect_stash = pad(area, 24)
     for _, e in ipairs(stash) do
@@ -1163,12 +1355,12 @@ M.remote.slice_inplace = function(a)
     for _, u in ipairs(unhandled) do S.unhandled[#S.unhandled + 1] = u end
     for _, u in ipairs(refused) do S.unhandled[#S.unhandled + 1] = u end
     for _, pw in ipairs(power_inplace(name, S, src, game.forces.player, area, inside)) do S.ports[#S.ports + 1] = pw end
+    power_closers(name, S, src, game.forces.player, inside)
     S.entities = src.count_entities_filtered{area = area}
     lap(nil)
   end)
   if not ok then
     lap(nil)
-    pcall(M.inplace_drop, name, S)
     pcall(sbx.drop, name)
     state()[name] = nil
     error(err, 0)
@@ -1180,6 +1372,8 @@ end
 
 -- Undo an in-place cut: closers out, stash back, wires back.
 function M.inplace_drop(name, S)
+  if S.restored then return end
+  S.restored = true
   local src = game.surfaces[S.source]
   destroy_closers(S)
   local stash_s = game.surfaces["fxlab-stash-" .. name]
@@ -1199,7 +1393,27 @@ function M.inplace_drop(name, S)
     restore_segments(src, S.pre)
     restore_belts(src, S.pre)
   end
-  if stash_s then game.delete_surface(stash_s) end
+  if stash_s then
+    S.stash_deleted = true
+    game.delete_surface(stash_s)
+  end
+end
+
+-- Runs before any sandbox is dropped: restores an in-place cut, deletes its stash and forgets the slice.
+-- Safe to run twice and on a slice that stopped half-built.
+M.on_drop = function(name, box)
+  local S = state()[name]
+  if not S then return end
+  if S.inplace then
+    local ok, err = pcall(M.inplace_drop, name, S)
+    if not ok then log("slice on_drop " .. name .. ": " .. tostring(err)) end
+    local stash_s = game.surfaces["fxlab-stash-" .. name]
+    if stash_s and not S.stash_deleted then
+      S.stash_deleted = true
+      game.delete_surface(stash_s)
+    end
+  end
+  state()[name] = nil
 end
 
 M.remote.slice_ports = function(a)
@@ -1212,7 +1426,8 @@ M.remote.slice_list = function()
   local out = {}
   for name, S in pairs(state()) do
     out[#out + 1] = {name = name, area = S.area, entities = S.entities, ports = #S.ports, unhandled = #S.unhandled,
-                     inplace = S.inplace or false, last_reset = S.last_reset}
+                     inplace = S.inplace or false, last_reset = S.last_reset, last_error = S.last_error,
+                     reset_at = S.reset_at}
   end
   table.sort(out, function(x, y) return x.name < y.name end)
   return {slices = out}
@@ -1267,9 +1482,7 @@ end
 M.remote.slice_drop = function(a)
   local S = state()[a.name]
   if not S then sbx.fail("not_found", "no slice " .. tostring(a.name)) end
-  if S.inplace then M.inplace_drop(a.name, S) end
   sbx.drop(a.name)
-  state()[a.name] = nil
   return {}
 end
 
