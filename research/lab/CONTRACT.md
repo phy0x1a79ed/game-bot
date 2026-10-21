@@ -22,20 +22,23 @@ Each scope edits only the files it owns. A scope that needs a change in another 
 | `fxlab-render` | `render.py`, `fixtures/render.py`, new verbs appended to `view.lua` |
 | `fxlab-designs` | `designs.py`, `research/designs/`, `fixtures/designs.py` |
 | `rlm-factorio` (awm) | `appliance/mods/game-bot-control/` |
-| `rlm-factorio-lab` (awm) | `awm/rlm_factorio/hub_adapter.py`, `validate.py`, `tests/`, `appliance/seat.sh` |
+| `rlm-factorio-lab` (awm) | `awm/rlm_factorio/`, `tests/`, `appliance/seat.sh`, `appliance/supervise.py`, `appliance/config/` |
 
 Paths without a directory are under `research/lab/fxlab/`.
 
 ## Labs
 
-**WARNING** Never touch the live realm. Do not `docker exec` into an `rlm-factorio` container, do not write to the `rlm-factorio_factorio-saves` volume and do not take a seat. Reach the game only through `fxlab` labs.
+**WARNING** Never touch the live realm. Do not `docker exec` into an `rlm-factorio` container, do not write to the `rlm-factorio_factorio-saves` volume and do not take a seat on the realm. Reach the game only through `fxlab` labs.
 
+- A lab is a world of kind `lab` that the `rlm-factorio` service acquires. `fxlab` calls the service over the gateway and never starts a container itself. The service gives each lab its own compose project, ports and saves folder, the lab mods, sandbox rules and the lab map-gen settings.
 - Run the CLI with `research/lab/fxlab.sh`. It uses the `game-bot` env's interpreter.
-- Each worktree gets its own container prefix (`fxlab-<scope>-`) and lab root (`~/.cache/fxlab/scopes/<scope>/`). `FXLAB_PREFIX` and `FXLAB_ROOT` override them. Realm saves are cached once, in `~/.cache/fxlab/_saves/`.
-- A lease caps the box at `FXLAB_MAX_LABS` lab servers (default 3), counted across every worktree. `Lab.up` waits for a free slot. Keep your labs few and take them down when done: `fxlab.sh down --all` removes this worktree's labs.
+- Each worktree gets its own world-name prefix (`fx-<scope>-`) and record root (`~/.cache/fxlab/scopes/<scope>/`). `FXLAB_PREFIX` and `FXLAB_ROOT` override them.
+- The service copies a realm save into the lab read-only. Seeded saves live in `~/.cache/fxlab/_saves/`, and `Lab.up` passes a seeded save by path.
+- The service caps the box at `RLM_FACTORIO_MAX_LABS` labs (default 3) and refuses one more with `LAB_CAP`. `Lab.up` retries for up to `FXLAB_CAP_WAIT` seconds. Keep your labs few and take them down when done: `fxlab.sh down --all` releases this worktree's labs.
 - `Lab.up(live=True)` leaves the game running. The default pauses it, and existing fixtures rely on that.
-- `FXLAB_GBC_MOD` points labs at another copy of `game-bot-control`. Set it to the `rlm-factorio` scope's `appliance/mods/game-bot-control` to test mod 0.6 before it deploys.
-- An RCON call costs one game frame (16.7 ms at speed 1). Batch work into one call.
+- `Lab.reload(name)` loads a save in place, pauses it and rejoins the camera. Without a name it loads the boot save. A lab made with `create` has no boot save.
+- A lab runs the service's copy of `game-bot-control`.
+- Each `Lab.lua` is one `exec_lua` and costs one game frame (16.7 ms at speed 1). Batch work into one call.
 
 ## sbx: the lab mod
 
@@ -142,13 +145,13 @@ Each verb takes `name`, the sandbox.
 
 ### Camera (`camera.py`, fxlab-cam)
 
-- `attach(lab)` and `detach(lab, missing_ok=False)`. `Lab.up(camera=True)` and `Lab.down` call them. The camera container is `<lab container>-cam` with labels `fxlab=1` and `fxlab.role=camera`. The lease does not count it.
-- `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG under the lab's `script-output`, returned once the file stops growing. `frame(area, zoom)` gives the position and pixel size `render` will use.
-- `attach` writes `camera.marker` in the lab dir. `render` re-attaches a lost camera only when the marker names the running lab container, and otherwise raises, so a render never adds a camera to a run that had none.
+- `attach(lab)` joins a seat of role `camera`, and `detach(lab)` leaves it. `Lab.up(camera=True)` calls `attach`, and releasing the lab removes the seat. The service parks the camera in the booth, allows one per world, never reclaims it for idleness and refuses it under realm rules.
+- `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG in the camera seat's output folder (`camera.output(lab)`), returned once the file stops growing. `frame(area, zoom)` gives the position and pixel size `render` will use.
+- `render` rejoins a camera whose client left the game. It raises on a lab without a camera seat, so a render never adds a camera to a run that had none.
 - `desyncs(lab)` lists desync lines in the camera and server logs. A fidelity arm with a camera must check it, and must check that `fxcam` is still connected.
-- **CAUTION** Files the game writes into `script-output` are owned by root on the host. Delete them with `docker exec <lab> rm`.
-- The sprite atlas caches mount read-only into every camera, so cameras can run side by side.
-- A fixture that needs the seeded save takes `source = "run4-closeout"`, takes that lab down, and brings it up again on `run4-closeout+cam`. It holds one lease slot at a time.
+- **CAUTION** The camera writes its files as root, so deleting one can fail. Every shot gets a new path, so a leftover never stands in for a new shot.
+- The service mounts the sprite atlas caches from `~/agentic_workspace/.awm/services/rlm-factorio/output/camera-cache` read-only into every camera, so cameras run side by side. Without them each join rebuilds the atlas.
+- A fixture that needs the seeded save takes `source = "run4-closeout"`, takes that lab down, and brings it up again on `run4-closeout+cam`. It holds one lab slot at a time.
 - `seed(save) -> str`: writes `<save>+cam` into `~/.cache/fxlab/_saves/`, with the camera player already in the save and parked in its booth. Start every arm of a fidelity comparison from the seeded save.
 - CLI: `fxlab.sh seed-camera <save>` and `fxlab.sh shot <lab> ...`, registered through `camera.register(sub)`.
 
@@ -192,15 +195,17 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 - A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts.
 - `tool_call` counts calls and errors per tool. `deny` covers the tool, every lib it uses and every tool it calls through `remote.call`, for the whole call. A nested call can widen `deny` but never narrow it. A denied call counts as neither a call nor an error.
 - From Python: `fxlab.tools.sync(lab)`, `fxlab.tools.call(lab, tool, /, **args)`, `fxlab.tools.listing(lab)`.
-- Keep replies compact and capped (`limit`, `offset`, `total`, `more`). An RCON reply over about 4 KB costs about two more frames. A tool call runs in one tick on every peer, so a slow call stalls every player on the realm. From the shell: `fxlab.sh tool-sync <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
+- Keep replies compact and capped (`limit`, `offset`, `total`, `more`). An RCON reply over about 4 KB costs about two more frames. A tool call runs in one tick on every peer, so a slow call stalls every player on the realm. From the shell: `fxlab.sh tool-sync <lab>`, `fxlab.sh tools <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
 
 ### Realm verbs (rlm-factorio-lab)
 
-- `session_id = "lab:<container>"` addresses a lab, for example `lab:fxlab-hub-trial`. The service refuses a container without the label `fxlab=1`. Seat verbs on a lab fail with "no seat in a lab".
+- A world is `headless` (the game), `lab` or `rendered` (the game with its port open for Tony to join). `acquire{kind, name, rules, save | create, live}` returns its `session_id`, and `status` lists every world with its `kind`, `rules` and `name`. Seats, pause, world verbs and events work the same on every kind.
 - `tool{name, args}`, `tool_list{}` and `tool_sync{names}` need mod 0.6. `tool_sync` reads `RLM_FACTORIO_TOOLS`, by default `~/agentic_workspace/projects/game-bot/factorio/research/tools`, the checkout the deploy updates. An empty `tools` list arrives as a list.
-- `sbx{verb, args}` forwards to the lab mod and works on lab targets only.
-- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `blueprint_stamp` with `build = true` or `build_mode = "built"`, every `sbx` verb outside a read allowlist (`sandbox_list`, `verbs`, `slice_list`, `slice_ports`, `slice_fingerprint`, `slice_area_of_base`, `slice_timing`, `bonuses`, `wave_status`, `ledger`, `view_shot`, `view_booth`, and `sbx_mode` with `mode = "standard"`), and every `cheat` tool, through `tool_call{deny = {"cheat"}}`. The refusal names the rule. Under realm rules the service refuses `tool` on a mod older than 0.6.1, because an older mod ignores `deny`.
-- Lab targets refuse every verb that uses the realm supervisor or the session DAO: pause, world verbs, reset, release, join. Lab calls have their own throttle keys and never feed the realm's events.
+- `sbx{verb, args}` forwards to the lab mod, which only a lab loads.
+- `advance{ticks, speed}` runs a world forward and pauses it again. One call runs for at most `RLM_FACTORIO_WAIT_MAX_S` seconds (default 600) and then replies `error = "TIMEOUT"` with the ticks it ran.
+- `wait_until{condition, timeout_s}` blocks until a condition holds: `entities_working`, `ghosts_built`, or a read `tool` whose result passes `op` at `path`. `timeout_s` is required and clamped to `RLM_FACTORIO_WAIT_MAX_S`. The reply carries `met`, or `error = "TIMEOUT"`, with the last observed state. Call it instead of a sleep loop.
+- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. A rendered world always runs realm rules. Under realm rules the service refuses `teleport`, `research`, `advance`, a camera seat, `blueprint_stamp` with `build = true` or `build_mode = "built"`, every `sbx` verb outside a read allowlist (`sandbox_list`, `verbs`, `slice_list`, `slice_ports`, `slice_fingerprint`, `slice_area_of_base`, `slice_timing`, `bonuses`, `wave_status`, `ledger`, `view_shot`, `view_booth`, and `sbx_mode` with `mode = "standard"`), and every `cheat` tool, through `tool_call{deny = {"cheat"}}`. The refusal names the rule. Under realm rules the service refuses `tool` on a mod older than 0.6.1, because an older mod ignores `deny`.
+- Under sandbox rules the command budget counts an overrun but never refuses it. Each seatless caller gets its own socket and throttle key on each world, and each world its own UPS gate.
 - `tool_sync` defines libs in `uses:` order and refuses a non-cheat tool whose `uses:` chain reaches a cheat lib.
 - The admin override is an `admin_token` argument that matches `RLM_FACTORIO_ADMIN_TOKEN_FILE`, by default `~/.config/rlm-factorio/admin-token`. It lifts every realm-rules refusal. A missing file means no override. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
 - `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
@@ -211,7 +216,8 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 - A module that fails to import shows up as the failing fixture `import_<module>`. Every other fixture still runs.
 - Run fixtures with `python -m fxlab.ratchet --no-advance <names>` or `--tag <tag>`. Pass `--no-advance` in a peripheral scope. Only the hub advances `best.json`.
 - Put noise in `data`, never in `score`. A noisy score makes the ratchet reject good runs.
-- Tag slow fixtures `slow`. Tag tool fixtures `tools` and run them with `camera=True` once the camera exists, because the camera is a real peer and shows a desync.
+- Tag slow fixtures `slow`. Tag tool fixtures `tools` and run them with `camera=True`, because the camera is a real peer and shows a desync.
+- A fixture deleted from the suite drops out of `best.json` on the next run.
 
 ## Shared formats
 

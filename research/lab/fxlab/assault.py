@@ -6,16 +6,12 @@ the run removes at the end. `where="world"` runs on the full nauvis, restarting 
 `where="slice"` runs on a cloned square and resets it between seeds.
 """
 
-import fcntl
 import json
 import math
-import shutil
 import statistics
-import subprocess
 import time
 from pathlib import Path
 
-from .lab import SHARED, docker
 
 TACTICS = Path(__file__).resolve().parents[1] / "tactics"
 SAVE = "run4-closeout"
@@ -253,40 +249,9 @@ def assault_open(lab, nest_at, where="world", radius=144, name="assault"):
     return box
 
 
-def _ingame(lab):
-    res = subprocess.run(["docker", "logs", lab.container], capture_output=True, text=True)
-    return (res.stdout + res.stderr).count("to(InGame)")
-
-
-def _reload(lab, wait=180):
-    """Restart the lab's server on a fresh copy of its save.
-
-    The server saves its map over the lab's copy when it stops, so the copy is replaced from the cache first. The lease
-    lock is held from the stop to the start: the lease counts running servers, so without it another worktree's
-    `Lab.up` could take the slot in between and put one server too many on the box.
-    """
-    cached = [p for p in lab.saves.glob("*.zip") if (SHARED / "_saves" / p.name).exists()]
-    if len(cached) != 1:
-        raise RuntimeError(f"{lab.container}: cannot tell which save to reload from {[p.name for p in cached]}")
-    seen = _ingame(lab)
-    lab.close()
-    with open(SHARED / "lease.lock", "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            docker("stop", "-t", "10", lab.container)
-            shutil.copy(SHARED / "_saves" / cached[0].name, cached[0])
-            docker("start", lab.container)
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-    deadline = time.time() + wait
-    while _ingame(lab) <= seen:
-        if time.time() > deadline or not lab.running():
-            raise RuntimeError(f"{lab.container} did not come back:\n{lab.logs(20)}")
-        time.sleep(0.3)
-    for _ in range(3):
-        if lab.lua("game.tick_paused = true rcon.print(tostring(game.tick_paused))").strip() == "true":
-            return
-    raise RuntimeError(f"{lab.container} would not pause")
+def _reload(lab):
+    """Load the lab's boot save in place and pause it, so each epoch starts from the same world."""
+    lab.reload()
 
 
 def _state(lab):
@@ -466,7 +431,7 @@ def _cli(args):
             params[k] = v
     lab = Lab(args.lab)
     lab.down()
-    lab.up(save=args.save, cpus=args.cpus)
+    lab.up(save=args.save)
     try:
         trials = assault_run(lab, args.tactic, params=params, seeds=args.seeds, max_ticks=args.max_ticks,
                              nest_at=args.nest, where=args.where)
@@ -488,7 +453,6 @@ def register(sub):
     p.add_argument("--param", action="append", metavar="K=V", help="a tactic parameter, value parsed as JSON")
     p.add_argument("--max-ticks", type=int, default=18000)
     p.add_argument("--save", default=SAVE)
-    p.add_argument("--cpus", type=float, default=2.0)
     p.add_argument("--lab", default="assault", help="name of the lab to bring up and take down")
     p.add_argument("--trials", action="store_true", help="include every trial in the output")
     return {"assault": _cli}

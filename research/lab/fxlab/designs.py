@@ -6,11 +6,11 @@ no unhandled port, every product positive and a render. `find` looks designs up 
 rectangle of a world into the blueprint and ports that `admit` takes.
 """
 
+import contextlib
 import json
 import os
 import re
 import shutil
-import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +20,6 @@ from .lab import SHARED, Lab, SbxError
 
 DESIGNS = Path(__file__).resolve().parents[2] / "designs"
 NAME = re.compile(r"[a-z0-9-]{1,48}")
-OUTPUT = "/opt/factorio/script-output"
 LIBRARY_PX = 1536
 
 FACTS = """
@@ -180,17 +179,12 @@ def _seeded(save):
     return seeded
 
 
-def _fetch(lab, shot, dest):
-    """Copy a render out of the lab's script-output, through the container when the root-owned file is unreadable."""
+def _fetch(shot, dest):
+    """Copy a render out of the camera's output."""
     path = Path(shot["path"])
     if not path.exists():
         raise Refused("render", f"the render left no file at {path}")
-    try:
-        shutil.copyfile(path, dest)
-    except PermissionError:
-        rel = path.relative_to(lab.output)
-        with open(dest, "wb") as fh:
-            subprocess.run(["docker", "exec", lab.container, "cat", f"{OUTPUT}/{rel}"], stdout=fh, check=True)
+    shutil.copyfile(path, dest)
     return path
 
 
@@ -231,7 +225,7 @@ def admit(blueprint, ports, products, name, summary="", author="", save="run4-cl
         root.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(stage, ignore_errors=True)
         stage.mkdir()
-        shot_path = _fetch(lab, shot, stage / "render.png")
+        shot_path = _fetch(shot, stage / "render.png")
         _check_render(shot, stage / "render.png")
         design = {
             "name": name, "summary": summary, "products": products, "ports": ports, "area": area,
@@ -251,8 +245,9 @@ def admit(blueprint, ports, products, name, summary="", author="", save="run4-cl
         raise
     finally:
         if shot_path is not None:
-            subprocess.run(["docker", "exec", lab.container, "rm", "-f",
-                            f"{OUTPUT}/{shot_path.relative_to(lab.output)}"], capture_output=True)
+            # the camera writes as root, so the file may not be ours to delete
+            with contextlib.suppress(OSError):
+                shot_path.unlink()
         lab.down()
     return {**design, "path": str(root / name), "wall_s": round(time.time() - t0, 1)}
 

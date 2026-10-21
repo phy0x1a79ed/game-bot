@@ -315,8 +315,10 @@ def _f1(corpus_id):
 
 
 def _save_of(lab):
-    saves = sorted(p.stem for p in lab.saves.glob("*.zip"))
-    return ("create" if saves[0] == "world" else saves[0]) if len(saves) == 1 else None
+    if lab.boot:
+        return lab.boot
+    saves = sorted(p.stem for p in lab.saves.glob("*.zip") if not p.stem.startswith("_"))
+    return "create" if not saves else saves[0] if len(saves) == 1 else None
 
 
 def _commit():

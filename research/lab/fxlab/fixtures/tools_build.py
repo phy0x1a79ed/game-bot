@@ -125,7 +125,7 @@ def finish(lab, ok, detail, data=None):
     """Let the game run a moment so the camera peer sees every change, then fold its state into the result."""
     lab.advance(120)
     connected, bad = peer(lab)
-    attached = camera._marker(lab).exists()
+    attached = camera.seat(lab) is not None
     data = dict(data or {}, camera_connected=connected, desyncs=bad[:5])
     return Result(ok and (connected or not attached) and not bad,
                   f"{detail}; camera connected {connected}, desync lines {len(bad)}", data=data)
@@ -135,7 +135,7 @@ def ready(lab):
     """Load the build tools, or say why the lab cannot. Returns the skip Result or None."""
     version = lab.lua('rcon.print(script.active_mods["game-bot-control"])').strip()
     if tuple(int(p) for p in version.split(".")) < (0, 6, 1):
-        return Result(False, f"game-bot-control {version} has no tool registry; set FXLAB_GBC_MOD")
+        return Result(False, f"game-bot-control {version} has no tool registry")
     tools.sync(lab, names=BUILD)
     return None
 

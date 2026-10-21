@@ -1,11 +1,10 @@
-"""fxlab CLI: up, down, ls, lua, advance, save, waits, act, sbx, tool, plus the commands each extension registers."""
+"""fxlab CLI: up, down, ls, lua, advance, save, waits, sbx, tool, tools, plus the commands each extension registers."""
 import argparse
 import importlib
 import json
 import sys
 
-from .acts import VERBS
-from .lab import Lab, LuaError, SbxError, labs
+from .lab import Lab, LuaError, SbxError, ServiceError, labs
 
 # Each extension module may define register(sub) -> {command: handler(args)}. A missing module is skipped.
 EXTENSIONS = ("camera", "render", "bench", "assault", "fidelity", "designs")
@@ -35,11 +34,9 @@ def main(argv=None):
     up.add_argument("name")
     src = up.add_mutually_exclusive_group(required=True)
     src.add_argument("--save", help="realm save name, copied read-only")
-    src.add_argument("--create", action="store_true", help="new world from fxlab/map-gen-settings.json")
-    up.add_argument("--cpus", type=float, default=2.0)
-    up.add_argument("--memory", default="4g")
+    src.add_argument("--create", action="store_true", help="new world from the service's lab map-gen settings")
     up.add_argument("--live", action="store_true", help="leave the game running instead of pausing it")
-    up.add_argument("--camera", action="store_true", help="attach a render client")
+    up.add_argument("--camera", action="store_true", help="join a camera seat")
     down = sub.add_parser("down")
     down.add_argument("names", nargs="*")
     down.add_argument("--all", action="store_true", help="every lab of this worktree")
@@ -60,11 +57,6 @@ def main(argv=None):
     wt.add_argument("--surface", default="nauvis")
     wt.add_argument("--area", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
     wt.add_argument("-n", type=int, default=15)
-    ac = sub.add_parser("act", help="one safe act: " + ", ".join(VERBS))
-    ac.add_argument("name")
-    ac.add_argument("verb")
-    ac.add_argument("args", nargs="*", help="key=value, e.g. name=iron-chest x=-6.5 y=-6.5")
-    ac.add_argument("--surface", default="nauvis")
     sb = sub.add_parser("sbx", help="call the fxlab-sbx mod: verb key=value ... (values parsed as JSON when they parse)")
     sb.add_argument("name")
     sb.add_argument("verb")
@@ -76,21 +68,26 @@ def main(argv=None):
     tc.add_argument("name")
     tc.add_argument("tool")
     tc.add_argument("args", nargs="*")
+    tl = sub.add_parser("tools", help="list the library tools defined in a lab, with their args")
+    tl.add_argument("name")
     handlers = extensions(sub)
     a = p.parse_args(argv)
 
     if a.cmd in handlers:
         sys.exit(handlers[a.cmd](a) or 0)
     elif a.cmd == "up":
-        lab = Lab(a.name).up(save=a.save, create=a.create, cpus=a.cpus, memory=a.memory, live=a.live,
-                             camera=a.camera)
-        print(f"{lab.container} up")
+        lab = Lab(a.name).up(save=a.save, create=a.create, live=a.live, camera=a.camera)
+        print(f"{lab.world} up ({lab.sid})")
     elif a.cmd == "down":
-        from .lab import PREFIX
-        names = [n.removeprefix(PREFIX) for n, _ in labs()] if a.all else a.names
-        for n in names:
-            Lab(n).down()
-            print(f"{PREFIX}{n} down")
+        from .lab import PREFIX, service, worlds
+        for r in worlds() if a.all else []:
+            if r["name"].startswith(PREFIX):
+                service("release", session_id=r["session_id"])
+                print(f"{r['name']} down")
+        for n in a.names:
+            lab = Lab(n)
+            lab.down()
+            print(f"{lab.world} down")
     elif a.cmd == "ls":
         for name, status in labs(everyone=a.everyone):
             print(f"{name}\t{status}")
@@ -99,9 +96,15 @@ def main(argv=None):
         kv = json_args(a.args)
         try:
             r = Lab(a.name).sbx(a.verb, **kv) if a.cmd == "sbx" else tools.call(Lab(a.name), a.tool, **kv)
-        except (SbxError, LuaError) as exc:
+        except (SbxError, LuaError, ServiceError) as exc:
             sys.exit(str(exc))
         print(json.dumps(r, indent=1))
+    elif a.cmd == "tools":
+        from . import tools
+        defined = {t["name"] for t in tools.listing(Lab(a.name))}
+        for n, t in tools.library().items():
+            if n in defined and t["header"]["kind"] == "call":
+                print(f"{n}: {t['header']['summary']}\n    args: {t['header']['args']}")
     elif a.cmd == "tool-sync":
         from . import tools
         print(" ".join(tools.sync(Lab(a.name), a.tools or None)))
@@ -115,11 +118,6 @@ def main(argv=None):
         print(f"{Lab(a.name).advance(a.ticks, a.speed):.1f}s")
     elif a.cmd == "save":
         print(Lab(a.name).save(a.save))
-    elif a.cmd == "act":
-        from . import acts
-        r = acts.act(Lab(a.name), a.verb, a.surface, **acts.parse_args(a.args))
-        print(acts.render(r))
-        sys.exit(0 if r["ok"] else 2)
     elif a.cmd == "waits":
         from . import waits
         area = ((a.area[0], a.area[1]), (a.area[2], a.area[3])) if a.area else None
