@@ -138,7 +138,7 @@ Each verb takes `name`, the sandbox.
 | `view_shot` | `surface`, `area` or `position` with `resolution`, `zoom`, `info`, `path` | `path` under `script-output`, `resolution`, `position` |
 | `view_stamp` | `blueprint`, `surface = "bp-view"`, `clear = true` | `built` (entities), `tiles`, `left`, `area`, `surface` |
 
-`view_stamp` builds a blueprint string on a hidden lab-tile surface. It accepts only surfaces named `bp-view*`, because `clear` destroys every entity there. It creates entities, so it stays off the realm-rules read allowlist. `render.py` wraps it: `render_slice`, `render_blueprint`, `render_area`.
+`view_stamp` builds a blueprint string on a hidden lab-tile surface. It accepts only surfaces named `bp-view*` that no sandbox record names, because `clear` destroys every entity there except characters. `clear` also restores the tiles an earlier stamp replaced. It creates entities, so it stays off the realm-rules read allowlist. `render.py` wraps it: `render_slice`, `render_blueprint`, `render_area`.
 
 ### Camera (`camera.py`, fxlab-cam)
 
@@ -224,7 +224,7 @@ A JSON list. Each entry: `id`, `save`, `area` as `[[x0, y0], [x1, y1]]`, `produc
 `bench()` returns, and the design library stores, one JSON object:
 
 - `subject`: `{area, save}` or `{blueprint}`.
-- `mode`: `god` or `standard`.
+- `mode`: `god` or `standard`. `power`: `keep` or `cut`, the `sbx_mode` power setting a standard window ran under.
 - `warmup_min`, `minutes`, `ticks`.
 - `rates`: net items per minute. Positive is output and negative is input.
 - `utilisation`: per recipe, 0 to 1.
