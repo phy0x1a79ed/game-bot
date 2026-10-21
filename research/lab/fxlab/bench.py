@@ -1,33 +1,83 @@
-"""Design bench: capture a design as a blueprint, rate it on an empty surface with free inputs and voided outputs.
+"""Module bench: rate a design on a slice, with its inputs supplied and its outputs voided.
 
-The rating is what the design makes per minute when nothing upstream or downstream binds it, plus how busy
-each recipe's machines were. Compare it with what the same design delivers in the base: the gap is supply.
+`bench` clones a rectangle of a world onto a sandbox (or stamps a blueprint first), closes every port, runs
+a warm-up and a measured window, and returns the bench record of CONTRACT.md. The rates are what the module
+makes per minute when nothing upstream or downstream binds it. Compare them with what the same module
+delivers in the base: the gap is supply.
 """
 
 import json
-from collections import defaultdict
+import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 
-LUA = Path(__file__).resolve().parent / "lua"
-TICKS_PER_MIN = 3600
+from .lab import SbxError
 
-STATS = """
-local st = game.forces.player.get_item_production_statistics(game.surfaces.bench)
-local inv = {} for k, v in pairs(defines.entity_status) do inv[v] = k end
-local machines = {}
-for _, e in pairs(game.surfaces.bench.find_entities_filtered{type = {"assembling-machine", "furnace", "lab", "mining-drill"}}) do
-  local r = (e.type == "assembling-machine" or e.type == "furnace") and e.get_recipe()
-  machines[#machines + 1] = {recipe = r and r.name or e.name, status = inv[e.status] or "?"}
+HERE = Path(__file__).resolve().parent
+CORPUS = HERE.parent / "fidelity" / "modules.json"
+TICKS_PER_MIN = 3600
+BELT_TYPES = ["transport-belt", "underground-belt", "splitter", "loader", "loader-1x1", "linked-belt"]
+
+SNAPSHOT = """
+local B = helpers.json_to_table([==[%s]==])
+local s = game.surfaces[B.surface]
+local st = game.forces[B.force].get_item_production_statistics(s)
+local machines, drills = {}, {}
+local function products(list)
+  local out = {}
+  for _, p in ipairs(list) do
+    if p.type ~= "fluid" then
+      out[#out + 1] = {name = p.name, amount = p.amount, amount_min = p.amount_min, amount_max = p.amount_max,
+                       probability = p.probability}
+    end
+  end
+  return out
 end
-rcon.print(helpers.table_to_json{tick = game.tick, made = st.input_counts, used = st.output_counts, machines = machines})
+for _, e in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnace", "mining-drill"}}) do
+  if e.type == "mining-drill" then
+    local t = e.mining_target
+    if t then
+      local m = t.prototype.mineable_properties
+      drills[#drills + 1] = {speed = e.prototype.mining_speed * (1 + e.speed_bonus), bonus = e.productivity_bonus,
+                             time = m.mining_time, products = products(m.products or {})}
+    end
+  else
+    local r = e.get_recipe() or e.previous_recipe
+    if r then
+      machines[#machines + 1] = {id = e.unit_number, recipe = r.name, finished = e.products_finished,
+                                 speed = e.crafting_speed, bonus = e.productivity_bonus, energy = r.energy,
+                                 products = products(r.products)}
+    end
+  end
+end
+rcon.print(helpers.table_to_json{tick = game.tick, made = st.input_counts, used = st.output_counts,
+                                 machines = machines, drills = drills})
+"""
+
+FEEDS = """
+local B = helpers.json_to_table([==[%s]==])
+local s = game.surfaces[B.surface]
+local out = {}
+for i, p in ipairs(B.feeds) do
+  local why
+  local c = p.closer
+  if c and s.count_entities_filtered{name = c.name, position = c.at, radius = c.radius} == 0 then
+    why = "closer gone"
+  elseif p.kind == "belt" then
+    local n = 0
+    for _, e in pairs(s.find_entities_filtered{position = p.position, type = B.belt_types}) do
+      for l = 1, e.get_max_transport_line_index() do n = n + #e.get_transport_line(l) end
+    end
+    if n == 0 then why = "empty" end
+  end
+  if why then out[#out + 1] = {i = i, why = why} end
+end
+rcon.print(helpers.table_to_json(out))
 """
 
 
-def lua_string(text):
-    return "[==[" + text + "]==]"
-
-
 def lua_value(v):
+    """Python value as a Lua literal."""
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
@@ -39,96 +89,199 @@ def lua_value(v):
     return "{" + ", ".join(f"[{json.dumps(k)}] = {lua_value(x)}" for k, x in v.items()) + "}"
 
 
-def capture(lab, area, surface="nauvis"):
-    """Blueprint string of every player entity in area ((x0, y0), (x1, y1)), plus the ports a live base shows."""
-    (x0, y0), (x1, y1) = area
-    cap = f"CAP = {{surface = \"{surface}\", x0 = {x0}, y0 = {y0}, x1 = {x1}, y1 = {y1}}}\n"
-    ports = json.loads(lab.lua_file(LUA / "capture-ports.lua", prelude=cap))["ports"]
-    return capture_bp(lab, area, surface), ports
+def _listing(x):
+    return list(x) if x else []
 
 
-def capture_bp(lab, area, surface="nauvis"):
-    (x0, y0), (x1, y1) = area
-    out = lab.lua(f"""
-local inv = game.create_inventory(1)
-inv[1].set_stack{{name = "blueprint"}}
-inv[1].create_blueprint{{surface = game.surfaces["{surface}"], force = "player", area = {{{{{x0}, {y0}}}, {{{x1}, {y1}}}}},
-  include_trains = false, include_station_names = false}}
-rcon.print(inv[1].export_stack())
-inv.destroy()""")
-    return out.strip()
+def _lua_json(lab, template, **args):
+    return json.loads(lab.lua(template % json.dumps(args)))
 
 
-def build(lab, bp, fuel="coal", swap=(), ports=None):
-    swaps = ", ".join(f'["{k}"] = true' for k in swap)
-    declared = f", ports = {lua_value(ports)}" if ports else ""
-    prelude = f"BENCH = {{bp = {lua_string(bp)}, fuel = \"{fuel}\", swap = {{{swaps}}}{declared}}}\n"
-    return json.loads(lab.lua_file(LUA / "bench-build.lua", prelude=prelude))
+def _snapshot(lab, name):
+    return _lua_json(lab, SNAPSHOT, surface=f"sbx-{name}", force=f"sbx-{name}")
 
 
-def _stats(lab):
-    return json.loads(lab.lua(STATS))
+def _expected(product):
+    amount = product.get("amount")
+    if amount is None:
+        amount = (product["amount_min"] + product["amount_max"]) / 2
+    return amount * (product.get("probability") or 1)
 
 
-def port_key(p):
-    return f"{p['x']:.1f},{p['y']:.1f}"
+def _feed_items(port):
+    if port.get("fluid"):
+        return [port["fluid"]]
+    items = list(port.get("items") or [])
+    for lane in _listing(port.get("lanes")):
+        items += _listing(lane)
+    return sorted(set(items))
 
 
-def lane_choice(lab, bp, fuel="coal", trial_min=2):
-    """Which lane gets which item matters when a design splits lanes. Try each two-item port both ways."""
-    report = build(lab, bp, fuel)
-    two = [port_key(p) for p in report["ports"] if p["kind"] == "belt-in" and len(p.get("items", [])) >= 2]
-    best, best_out = (), -1.0
-    for mask in range(2 ** min(len(two), 3)):
-        swap = tuple(k for i, k in enumerate(two) if mask >> i & 1)
-        build(lab, bp, fuel, swap)
-        first = _stats(lab)
-        lab.advance(trial_min * TICKS_PER_MIN)
-        last = _stats(lab)
-        out = sum(max(0, last["made"].get(n, 0) - first["made"].get(n, 0)
-                      - (last["used"].get(n, 0) - first["used"].get(n, 0))) for n in last["made"])
-        if out > best_out:
-            best, best_out = swap, out
-    return best
+def _closer_probe(port):
+    """The entity whose absence means the port has lost its supply: a name, a place and a search radius."""
+    if port["kind"] == "power":
+        return {"name": "electric-energy-interface", "at": port["position"], "radius": 1.5}
+    if port.get("pipe"):
+        return {"name": "infinity-pipe", "at": port["pipe"], "radius": 0.6}
+    if port.get("chest"):
+        return {"name": "infinity-chest", "at": port["chest"], "radius": 0.6}
+    near = port.get("tee") or port.get("load")
+    if near and not port.get("scripted"):
+        return {"name": "infinity-chest", "at": near, "radius": 3.5}
+    return None
 
 
-def rate(lab, bp, minutes=10, warmup=3, samples_per_min=6, fuel="coal", ports=None, swap=None):
-    """Build bp on the bench, run warmup minutes, then measure for `minutes`. Returns a rating dict.
+def _starved(feeds, probes):
+    """Feed ports flagged starved at the slice, plus any whose closer is gone or whose belt tile was empty at the last sample."""
+    why = {i: "no supply at the source" for i, p in enumerate(feeds) if p.get("starved")}
+    for hit in probes[-1] if probes else []:
+        why.setdefault(hit["i"] - 1, hit["why"])
+    return [{"position": feeds[i]["position"], "kind": feeds[i]["kind"], "items": _feed_items(feeds[i]), "why": w}
+            for i, w in sorted(why.items())]
 
-    Pass the ports `capture` returned. Without them the bench guesses ports and tries lane orders."""
-    if swap is None:
-        swap = () if ports else lane_choice(lab, bp, fuel)
-    report = build(lab, bp, fuel, swap, ports)
-    lab.advance(warmup * TICKS_PER_MIN)
-    first = _stats(lab)
-    busy = defaultdict(lambda: [0, 0])
-    step = TICKS_PER_MIN // samples_per_min
-    for _ in range(minutes * samples_per_min):
-        lab.advance(step)
-        for m in _stats(lab)["machines"]:
-            busy[m["recipe"]][1] += 1
-            if m["status"] == "working":
-                busy[m["recipe"]][0] += 1
-    last = _stats(lab)
-    span = (last["tick"] - first["tick"]) / TICKS_PER_MIN
 
-    def per_min(key):
-        names = set(first[key]) | set(last[key])
-        return {n: (last[key].get(n, 0) - first[key].get(n, 0)) / span for n in names}
+def _rates(first, last, minutes):
+    names = set(last["made"]) | set(last["used"])
+    net = {n: ((last["made"].get(n, 0) - first["made"].get(n, 0))
+               - (last["used"].get(n, 0) - first["used"].get(n, 0))) / minutes for n in names}
+    return {n: round(v, 2) for n, v in sorted(net.items()) if abs(v) >= 0.005}
 
-    made, used = per_min("made"), per_min("used")
-    net = {n: round(made.get(n, 0) - used.get(n, 0), 2) for n in set(made) | set(used)}
-    statuses = defaultdict(lambda: defaultdict(int))
+
+def _utilisation(first, last, ticks):
+    before = {m["id"]: m["finished"] for m in first["machines"]}
+    done, possible = {}, {}
     for m in last["machines"]:
-        statuses[m["recipe"]][m["status"]] += 1
+        if m["id"] not in before or not m["energy"]:
+            continue
+        done[m["recipe"]] = done.get(m["recipe"], 0) + m["finished"] - before[m["id"]]
+        possible[m["recipe"]] = possible.get(m["recipe"], 0) + m["speed"] * ticks / (m["energy"] * 60)
+    return {r: round(min(1.0, done[r] / possible[r]), 3) for r in sorted(done) if possible[r] > 0}
+
+
+def _ceiling(last):
+    """Per item, per minute: every machine making it flat out, productivity included."""
+    out = {}
+    for m in last["machines"]:
+        if not m["energy"]:
+            continue
+        per_min = m["speed"] * (1 + m["bonus"]) / m["energy"] * TICKS_PER_MIN / 60
+        for p in _listing(m["products"]):
+            out[p["name"]] = out.get(p["name"], 0) + per_min * _expected(p)
+    for d in last["drills"]:
+        per_min = d["speed"] * (1 + d["bonus"]) / d["time"] * 60
+        for p in _listing(d["products"]):
+            out[p["name"]] = out.get(p["name"], 0) + per_min * _expected(p)
+    return {n: round(v, 2) for n, v in sorted(out.items())}
+
+
+def _corpus_id(area):
+    if not CORPUS.exists():
+        return None
+    for entry in json.loads(CORPUS.read_text()):
+        if entry["area"] == [list(p) for p in area]:
+            return entry["id"]
+    return None
+
+
+def _save_of(lab):
+    saves = sorted(p.stem for p in lab.saves.glob("*.zip"))
+    return ("create" if saves[0] == "world" else saves[0]) if len(saves) == 1 else None
+
+
+def _commit():
+    out = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=HERE, capture_output=True, text=True)
+    return out.stdout.strip() or None
+
+
+def _drop(lab, name):
+    try:
+        lab.sbx("slice_drop", name=name)
+    except SbxError as exc:
+        if exc.code != "not_found":
+            raise
+
+
+def _measure(lab, area, name, minutes, warmup, mode, speed):
+    """Build the slice, run it, and return the measurements of the record. The slice stays for the caller to drop."""
+    built = lab.sbx("slice_build", name=name, area=[list(p) for p in area], source="nauvis", research="copy")
+    unhandled = _listing(built["unhandled"])
+    if unhandled:
+        raise SbxError("unhandled_ports", unhandled)
+    ports = lab.sbx("slice_ports", name=name)
+    feeds = [p for p in _listing(ports["ports"]) if p.get("role") == "feed"]
+    probe = dict(surface=f"sbx-{name}", belt_types=BELT_TYPES,
+                 feeds=[{"kind": p["kind"], "position": p["position"], "closer": _closer_probe(p)} for p in feeds])
+    lab.advance(warmup * TICKS_PER_MIN, speed=speed)
+    if mode == "standard":
+        lab.sbx("sbx_mode", name=name, mode="standard", research="keep")
+    first = _snapshot(lab, name)
+    probes = []
+    for _ in range(minutes):
+        lab.advance(TICKS_PER_MIN, speed=speed)
+        probes.append(_lua_json(lab, FEEDS, **probe))
+    last = _snapshot(lab, name)
+    ticks = last["tick"] - first["tick"]
     return {
-        "minutes": round(span, 2),
-        "outputs": {n: v for n, v in sorted(net.items()) if v > 0.05},
-        "inputs": {n: -v for n, v in sorted(net.items()) if v < -0.05},
-        "utilisation": {r: round(w / t, 2) for r, (w, t) in sorted(busy.items())},
-        "status_at_end": {r: dict(v) for r, v in statuses.items()},
-        "ports": report["ports"],
-        "unhandled": report["unhandled"],
-        "entities": report["entities"],
-        "swap": list(swap),
+        "ticks": ticks,
+        "rates": _rates(first, last, ticks / TICKS_PER_MIN),
+        "utilisation": _utilisation(first, last, ticks),
+        "ceiling": _ceiling(last),
+        "starved": _starved(feeds, [_listing(p) for p in probes]),
     }
+
+
+def bench(lab, area=None, save=None, blueprint=None, ports=None, minutes=10, warmup=3, mode="god", name=None,
+          speed=1000.0):
+    """Rate a module and return its bench record.
+
+    The subject is a rectangle of the lab's world (`area` as ((x0, y0), (x1, y1)); `save` names the world for the
+    record) or a blueprint string with its `ports`. A slice with unhandled ports raises
+    SbxError("unhandled_ports", list). mode="standard" cuts the supply and the power after the warm-up.
+    """
+    if mode not in ("god", "standard"):
+        raise ValueError(f"mode {mode!r}: god or standard")
+    name = name or "bench"
+    if blueprint is not None:
+        area = stamp(lab, blueprint, ports, name)
+        subject = {"blueprint": blueprint}
+    elif area is None:
+        raise ValueError("bench needs an area or a blueprint")
+    else:
+        subject = {"area": [list(p) for p in area], "save": save or _save_of(lab)}
+    try:
+        measured = _measure(lab, area, name, minutes, warmup, mode, speed)
+    finally:
+        _drop(lab, name)
+    return {
+        "subject": subject,
+        "mode": mode,
+        "warmup_min": warmup,
+        "minutes": minutes,
+        **measured,
+        "unhandled": [],
+        "fidelity": {"corpus": _corpus_id(area), "f1": None},
+        "commit": _commit(),
+        "stamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def stamp(lab, blueprint, ports, name):
+    """Build a blueprint on empty ground of a created world and return its rectangle, ports made into crossings."""
+    raise NotImplementedError
+
+
+def register(sub):
+    p = sub.add_parser("bench", help="rate the module in a rectangle on a slice; prints the bench record as JSON")
+    p.add_argument("name")
+    for k in ("x0", "y0", "x1", "y1"):
+        p.add_argument(k, type=float)
+    p.add_argument("--minutes", type=int, default=10)
+    p.add_argument("--warmup", type=int, default=3)
+    p.add_argument("--mode", choices=("god", "standard"), default="god")
+
+    def run(a):
+        from .lab import Lab
+        record = bench(Lab(a.name), ((a.x0, a.y0), (a.x1, a.y1)), minutes=a.minutes, warmup=a.warmup, mode=a.mode)
+        print(json.dumps(record, indent=1))
+
+    return {"bench": run}
