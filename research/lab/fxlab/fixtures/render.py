@@ -181,6 +181,13 @@ def render_blueprint_bad(lab):
         codes["nauvis"] = "accepted"
     left_behind = _stamp_surface_exists(lab)
     after = lab.sbx("view_stamp", blueprint=good)
+    lab.sbx("sandbox_new", name="adopt", inplace={"surface": render.STAMP_SURFACE, "force": "player"})
+    try:
+        lab.sbx("view_stamp", blueprint=good)
+    except SbxError as exc:
+        codes["adopted"] = exc.code
+    else:
+        codes["adopted"] = "accepted"
     ok = all(c == "bad_args" for c in codes.values()) and not left_behind and after["built"] == n
     return Result(ok, f"codes {codes}; surface left behind {left_behind}; good stamp after: {after['built']}/{n}",
                   data={"codes": codes})
@@ -199,6 +206,30 @@ def _surface_records(lab, surface):
     return json.loads(out)
 
 
+TILE_BP = """
+local inv = game.create_inventory(1)
+inv[1].set_stack{name = "blueprint"}
+local tiles = {}
+for x = 0, 3 do for y = 0, 3 do tiles[#tiles + 1] = {name = "concrete", position = {x, y}} end end
+inv[1].set_blueprint_tiles(tiles)
+rcon.print(inv[1].export_stack())
+inv.destroy()
+"""
+CONCRETE = ('rcon.print(#game.surfaces["bp-view"].find_tiles_filtered{{name = "concrete"}})')
+
+
+def _concrete_is_reset(lab, bp):
+    """A tile stamp lays concrete, and the next clearing stamp puts the lab tiles back without killing a character."""
+    tile_bp = lab.lua(TILE_BP).strip()
+    lab.sbx("view_stamp", blueprint=tile_bp, clear=True)
+    laid = int(lab.lua(CONCRETE.format()))
+    lab.lua('game.surfaces["bp-view"].create_entity{name = "character", position = {40, 40}, force = "player"}')
+    lab.sbx("view_stamp", blueprint=bp, clear=True)
+    left = int(lab.lua(CONCRETE.format()))
+    kept = lab.lua('rcon.print(tostring(#game.surfaces["bp-view"].find_entities_filtered{type = "character"} == 1))')
+    return laid, left, kept.strip() == "true"
+
+
 @fixture(source="create", tags={"render"}, camera=True)
 def render_stamp_deterministic(lab):
     """Two stamps with clear leave the same entities at the same positions, and the camera peer sees no desync."""
@@ -210,11 +241,13 @@ def render_stamp_deterministic(lab):
     res = render.render_blueprint(lab, bp)
     lab.advance(120)
     records_c = _surface_records(lab, render.STAMP_SURFACE)
+    clean = _concrete_is_reset(lab, bp)
     connected, bad = _camera_state(lab)
     check = _check_png(res)
     same = records_a == records_b and first["area"] == second["area"] and len(records_a) == n
     ok = same and len(records_c) == n and not first["left"] and not second["left"] and connected and not bad \
-        and _shot_ok(check)
+        and _shot_ok(check) and clean == (16, 0, True)
     return Result(ok, f"{len(records_a)}/{len(records_b)} entities of {n}, identical {records_a == records_b}, "
-                      f"area {first['area']}; connected {connected}, desync lines {len(bad)}; shot {check['colours']} colours",
+                      f"area {first['area']}; concrete/after clear/character kept {clean}; "
+                      f"connected {connected}, desync lines {len(bad)}; shot {check['colours']} colours",
                   data={"area": first["area"], "desyncs": bad[:5], **check})

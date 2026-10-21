@@ -106,6 +106,38 @@ local function blueprint_reach(stack)
   return reach
 end
 
+local function owned_by_a_sandbox(name)
+  for _, box in pairs((storage.sbx and storage.sbx.boxes) or {}) do
+    if box.surface == name then return true end
+    for _, extra in ipairs(box.surfaces or {}) do
+      if extra == name then return true end
+    end
+  end
+  return false
+end
+
+-- storage.view.stamped[surface] = {{x, y, name}, ...}: the tile each stamped tile replaced, in stamp order.
+local function restore_tiles(s)
+  local stamped = storage.view.stamped or {}
+  local saved = stamped[s.name]
+  if saved and #saved > 0 then
+    local tiles = {}
+    for i, t in ipairs(saved) do tiles[i] = {name = t[3], position = {t[1], t[2]}} end
+    s.set_tiles(tiles)
+  end
+  stamped[s.name] = {}
+  storage.view.stamped = stamped
+end
+
+local function remember_tile(s, pos, seen)
+  local x, y = pos.x - 0.5, pos.y - 0.5
+  local key = x .. "," .. y
+  if seen[key] then return end
+  seen[key] = true
+  local list = storage.view.stamped[s.name]
+  list[#list + 1] = {x, y, s.get_tile(pos.x, pos.y).name}
+end
+
 local function grow(box, lt, rb)
   if not box then return {lt[1], lt[2], rb[1], rb[2]} end
   return {math.min(box[1], lt[1]), math.min(box[2], lt[2]), math.max(box[3], rb[1]), math.max(box[4], rb[2])}
@@ -113,14 +145,16 @@ end
 
 -- view_stamp{blueprint, surface = "bp-view", clear = true}: build a blueprint string on a hidden lab-tile surface
 -- and revive every ghost. Returns built, left (ghosts that would not revive), area and surface. The string is
--- checked before the surface is touched, so a bad string leaves nothing behind. Only surfaces named bp-view*
--- are accepted, because clear destroys everything on the surface.
+-- checked before the surface is touched, so a bad string leaves nothing behind. Only surfaces named bp-view* that
+-- no sandbox record names are accepted, because clear destroys what stands on the surface (never a character) and
+-- puts back the tiles an earlier stamp replaced.
 function M.remote.view_stamp(a)
   init()
   local name = a.surface or STAMP_PREFIX
   if type(name) ~= "string" or name:sub(1, #STAMP_PREFIX) ~= STAMP_PREFIX then
     sbx.fail("bad_args", "surface must start with " .. STAMP_PREFIX)
   end
+  if owned_by_a_sandbox(name) then sbx.fail("bad_args", "surface " .. name .. " belongs to a sandbox") end
   if type(a.blueprint) ~= "string" or a.blueprint == "" then sbx.fail("bad_args", "need a blueprint string") end
   local inv = game.create_inventory(1)
   local ok, err = pcall(function()
@@ -142,15 +176,23 @@ function M.remote.view_stamp(a)
   end
   local s = stamp_surface(name, radius)
   if a.clear ~= false then
-    for _, e in pairs(s.find_entities()) do e.destroy() end
+    for _, e in pairs(s.find_entities()) do
+      if e.type ~= "character" then e.destroy() end
+    end
+    restore_tiles(s)
   end
+  storage.view.stamped = storage.view.stamped or {}
+  storage.view.stamped[name] = storage.view.stamped[name] or {}
   local ghosts = inv[1].build_blueprint{surface = s, force = "player", position = STAMP_AT,
                                         build_mode = defines.build_mode.forced}
   inv.destroy()
+  local seen = {}
+  for _, t in ipairs(storage.view.stamped[name]) do seen[t[1] .. "," .. t[2]] = true end
   local built, tiles, left, box = 0, 0, {}, nil
   for _, g in ipairs(ghosts) do
     if g.valid then
       local gname, pos, is_tile = g.ghost_name, g.position, g.type == "tile-ghost"
+      if is_tile then remember_tile(s, pos, seen) end
       local revived, placed = g.revive{raise_revive = false}
       if revived == nil then
         left[#left + 1] = {name = gname, position = {pos.x, pos.y}}
