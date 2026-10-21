@@ -248,9 +248,16 @@ R.items = function(a)
   local target = a.target or "chest"
   local units, totals = {}, {}
   if target == "entity" then
-    if type(a.entity) ~= "number" then sbx.fail("bad_args", "target entity needs entity, a unit number") end
-    local e = entity_by_unit(a.name, a.entity)
-    if not e then sbx.fail("not_found", "no entity with unit number " .. tostring(a.entity)) end
+    local e
+    if type(a.entity) == "number" then
+      e = entity_by_unit(a.name, a.entity)
+    elseif type(a.entity) == "string" and a.at then
+      -- turrets and chests are not found by unit number, so they are addressed by name and position
+      e = s.find_entities_filtered{name = a.entity, position = point(a.at), radius = 0.5, limit = 1}[1]
+    else
+      sbx.fail("bad_args", "target entity needs entity, a unit number, or an entity name with at")
+    end
+    if not e then sbx.fail("not_found", "no entity " .. tostring(a.entity) .. (a.at and " at the given position" or "")) end
     insert_all(e, a.items, totals)
     return {units = {}, inserted = totals}
   end

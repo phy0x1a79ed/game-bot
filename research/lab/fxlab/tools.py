@@ -106,9 +106,9 @@ def sync(lab, names=None, root=TOOLS):
     return chosen
 
 
-def call(lab, name, **args):
-    """Run tool `name` with args in the lab and return what it returned."""
-    return _check(lab.call("game_bot", "tool_call", {"name": name, "args": args})).get("r")
+def call(lab, tool, /, **args):
+    """Run `tool` with args in the lab and return what it returned. Positional, so a tool may take an arg `name`."""
+    return _check(lab.call("game_bot", "tool_call", {"name": tool, "args": args})).get("r")
 
 
 def listing(lab):

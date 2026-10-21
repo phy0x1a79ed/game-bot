@@ -1120,7 +1120,9 @@ M.remote.slice_build = function(a)
     state()[name] = nil
     error(err, 0)
   end
-  return summary(state()[name])
+  local r = summary(state()[name])
+  r.sandbox = {name = box.name, surface = box.surface, force = box.force, mode = box.mode}
+  return r
 end
 
 M.remote.slice_reset = function(a)

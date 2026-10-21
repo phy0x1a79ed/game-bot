@@ -118,7 +118,7 @@ Each verb takes `name`, the sandbox.
 |---|---|---|
 | `research` | `mode = "copy" \| "list" \| "levels" \| "all" \| "none"`, `techs`, `levels = {tech = N}`, `recipes` | changed techs. An in-place box refuses `all` and `none`, and its switch to standard replays each entry's `before` |
 | `bonuses` | | every bonus field of the sandbox force (a read) |
-| `items` | `at`, `items = {{name, count, quality}}`, `target = "chest" \| "infinity" \| "belt" \| "entity" \| "ground"`, `entity` | spawned unit numbers |
+| `items` | `at`, `items = {{name, count, quality}}`, `target = "chest" \| "infinity" \| "belt" \| "entity" \| "ground"`, `entity` (a unit number, or an entity name with `at`: turrets and chests are not found by unit number) | spawned unit numbers |
 | `evo` | `set` | evolution factor of the sandbox surface |
 | `nest` | `at`, `names`, `evo` | unit numbers |
 | `wave` | `from`, `target`, `units = {name = count}`, `radius` | `group` |
@@ -136,8 +136,9 @@ Each verb takes `name`, the sandbox.
 |---|---|---|
 | `view_booth` | `player` | parks the camera player on the `cam-booth` surface |
 | `view_shot` | `surface`, `area` or `position` with `resolution`, `zoom`, `info`, `path` | `path` under `script-output`, `resolution`, `position` |
+| `view_stamp` | `blueprint`, `surface = "bp-view"`, `clear = true` | `built` (entities), `tiles`, `left`, `area`, `surface` |
 
-`fxlab-render` may append verbs such as `view_stamp` for blueprints.
+`view_stamp` builds a blueprint string on a hidden lab-tile surface. It accepts only surfaces named `bp-view*`, because `clear` destroys every entity there. It creates entities, so it stays off the realm-rules read allowlist. `render.py` wraps it: `render_slice`, `render_blueprint`, `render_area`.
 
 ### Camera (`camera.py`, fxlab-cam)
 
@@ -190,7 +191,8 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 - Tools live in `storage.tools`, apart from the stored scripts, so the script LRU never evicts them. The cap is 256 tools.
 - A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts.
 - `tool_call` counts calls and errors per tool. `deny` covers the tool, every lib it uses and every tool it calls through `remote.call`, for the whole call. A nested call can widen `deny` but never narrow it. A denied call counts as neither a call nor an error.
-- From Python: `fxlab.tools.sync(lab)`, `fxlab.tools.call(lab, name, **args)`, `fxlab.tools.listing(lab)`. From the shell: `fxlab.sh tool-sync <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
+- From Python: `fxlab.tools.sync(lab)`, `fxlab.tools.call(lab, tool, /, **args)`, `fxlab.tools.listing(lab)`.
+- Keep replies compact and capped (`limit`, `offset`, `total`, `more`). An RCON reply over about 4 KB costs about two more frames. A tool call runs in one tick on every peer, so a slow call stalls every player on the realm. From the shell: `fxlab.sh tool-sync <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
 
 ### Realm verbs (rlm-factorio-lab)
 
@@ -227,7 +229,9 @@ A JSON list. Each entry: `id`, `save`, `area` as `[[x0, y0], [x1, y1]]`, `produc
 - `rates`: net items per minute. Positive is output and negative is input.
 - `utilisation`: per recipe, 0 to 1.
 - `ceiling`: per item, the recipe ceiling per minute.
-- `starved`: the ports that ran empty.
+- `starved`: the ports that ran empty: the slice flagged the port `starved`, its closer is gone, or its belt tile was empty at the last sample.
 - `unhandled`: always empty, because the bench refuses a slice with unhandled ports.
 - `fidelity`: the corpus id and F1 result of the setup it ran on.
+
+A blueprint subject takes `ports` in the blueprint entities' own frame, so the `slice_ports` output of the source rect works as it is. A stamped design starts with empty belts and buffers: give it about 8 minutes of warm-up.
 - `commit`, `stamp`.
