@@ -470,6 +470,19 @@ def build_route_no_path(lab):
 
 
 @fixture(source="create", tags={"tools", "build"}, camera=True)
+def build_route_avoids_foreign_belt(lab):
+    """A tile that an existing belt feeds is not stepped on: the route detours, and check finds nothing joined."""
+    setup = "".join(f'mk(s, {{name = "transport-belt", position = {{5.5, {y + 0.5}}}, direction = D.south}})\n' for y in (-2, -1, 0, 1))
+    res, again, ms, pure = route_case(lab, "route-foreign", setup, (0, 2), (10, 2), (-2, -6, 14, 8))
+    if again is None:
+        return res if isinstance(res, Result) else Result(False, f"no route: {res}")
+    stepped = [e for e in res["list"] if e["position"] == [5.5, 2.5]]
+    ok = res["ok"] and again["ok"] and not stepped and not lst(res["issues"]) and pure
+    return finish(lab, ok, f"{res['summary']}; length {res['length']}, undergrounds {res['undergrounds']}; stepped on the fed tile: "
+                           f"{bool(stepped)}; {ms:.0f} ms; pure read {pure}", {"ms": round(ms, 1)})
+
+
+@fixture(source="create", tags={"tools", "build"}, camera=True)
 def build_bad_args(lab):
     """A malformed call to any build tool answers {error, hint}: no Lua error, and nothing is counted as a tool error."""
     skip = ready(lab)
@@ -591,3 +604,230 @@ def build_place_one_bad_entry(lab):
           and {x["i"] for x in issues} == {5})
     return finish(lab, ok, f"{res.get('summary')}; ghosts {before['ghosts']} -> {after['ghosts']}; issues "
                            f"{[(x['i'], x['code']) for x in issues]}; {ms:.0f} ms", {"ms": round(ms, 1)})
+
+
+RUN4_RECT = ((20, 0), (40, 20))
+COPY_TYPES = ("transport-belt", "underground-belt", "splitter", "inserter", "mining-drill", "assembling-machine", "furnace",
+              "electric-pole", "pipe", "pipe-to-ground", "container", "logistic-container", "lab", "boiler", "storage-tank",
+              "pump", "offshore-pump", "generator")
+
+# Reads the real entities of a run4 rect, up to 26 machines, inserters, poles and pipes and then 24 belts and undergrounds,
+# nearest the middle first, destroys them in this throwaway world and returns each
+# as a check entry with the intent its real state implies (an inserter drops where its hand drops, a drill outputs where it
+# drops). The check then runs against the surroundings alone, so every issue it raises is judged against a layout that worked.
+COPY_OUT = """
+local s = game.surfaces.nauvis
+local C = {[0] = {0, -1}, [4] = {1, 0}, [8] = {0, 1}, [12] = {-1, 0}}
+local function card(dx, dy)
+  if math.abs(dx) > math.abs(dy) then return {dx > 0 and 1 or -1, 0} end
+  return {0, dy > 0 and 1 or -1}
+end
+local types = {}
+for _, t in pairs(TYPES) do types[t] = true end
+local found = {}
+for _, e in pairs(s.find_entities_filtered{area = AREA, force = "player"}) do
+  if types[e.type] then found[#found + 1] = e end
+end
+local cx, cy = (AREA[1][1] + AREA[2][1]) / 2, (AREA[1][2] + AREA[2][2]) / 2
+table.sort(found, function(a, b)
+  local da, db = (a.position.x - cx) ^ 2 + (a.position.y - cy) ^ 2, (b.position.x - cx) ^ 2 + (b.position.y - cy) ^ 2
+  if da ~= db then return da < db end
+  return a.unit_number < b.unit_number
+end)
+local belts = {transport_belt = true, ["transport-belt"] = true, ["underground-belt"] = true, splitter = true}
+local picked, rest = {}, {}
+for _, e in ipairs(found) do
+  if belts[e.type] or #picked >= COUNT - BELTS then rest[#rest + 1] = e else picked[#picked + 1] = e end
+end
+for _, e in ipairs(rest) do
+  if #picked < COUNT and belts[e.type] then picked[#picked + 1] = e end
+end
+for _, e in ipairs(rest) do
+  if #picked < COUNT and not belts[e.type] then picked[#picked + 1] = e end
+end
+found = picked
+local out, kinds = {}, {}
+for i = 1, #found do
+  local e = found[i]
+  local r = {name = e.name, position = {e.position.x, e.position.y}}
+  local t = e.type
+  if t == "inserter" then r.intent = {drop = card(e.drop_position.x - e.position.x, e.drop_position.y - e.position.y)}
+  elseif t == "mining-drill" then r.intent = {output = card(e.drop_position.x - e.position.x, e.drop_position.y - e.position.y)}
+  elseif t == "transport-belt" or t == "splitter" then r.intent = {flow = C[e.direction]}
+  elseif t == "underground-belt" then r.intent = {flow = C[e.direction], role = e.belt_to_ground_type == "input" and "entry" or "exit"}
+  elseif t == "pipe-to-ground" then
+    for _, fb in pairs(e.prototype.fluidbox_prototypes) do
+      for _, c in pairs(fb.pipe_connections) do
+        if c.connection_type == "underground" then r.intent = {toward = C[(c.direction + e.direction) % 16]} end
+      end
+    end
+  else
+    r.direction = e.direction
+    if t == "assembling-machine" then
+      local rec = e.get_recipe()
+      if rec then r.intent = {recipe = rec.name} end
+    end
+  end
+  out[#out + 1] = r
+  kinds[t] = (kinds[t] or 0) + 1
+end
+for i = 1, #found do found[i].destroy() end
+rcon.print(helpers.table_to_json({list = out, kinds = kinds}))
+"""
+
+
+@fixture(source=SEEDED, tags={"tools", "build", "slow"}, camera=True)
+def build_check_run4_false_positives(lab):
+    """check on 50 real run4 entities, read from a rect and removed from the world first, so each issue it raises is a false positive."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    area = [list(RUN4_RECT[0]), list(RUN4_RECT[1])]
+    copied = json.loads(lab.lua(f"AREA = {json.dumps(area).replace('[', '{').replace(']', '}')}\n"
+                                f"COUNT = 50\nBELTS = 24\nTYPES = {json.dumps(list(COPY_TYPES)).replace('[', '{').replace(']', '}')}\n" + COPY_OUT))
+    entries = lst(copied["list"])
+    res, ms = call(lab, "check", list=entries)
+    failing = [(i + 1, entries[i], r) for i, r in enumerate(lst(res["entries"])) if lst(r.get("issues"))]
+    by_code = {}
+    for i, e, r in failing:
+        for x in r["issues"]:
+            by_code.setdefault(x["code"], []).append({"i": i, "name": e["name"], "position": e["position"], "msg": x["msg"]})
+    detail = (f"{len(entries)} entries ({dict(copied['kinds'])}), {len(failing)} with issues "
+              f"{ {c: len(v) for c, v in sorted(by_code.items())} }; {ms:.0f} ms")
+    ok = len(entries) == 50 and len(lst(res["entries"])) == 50
+    return finish(lab, ok, detail, {"false_positives": by_code, "kinds": dict(copied["kinds"]), "ms": round(ms, 1)})
+
+
+# The first free w x h block of land found on rings around the roboports, clear of every entity but ore and inside a
+# construction area that holds robots. Prints the block's top-left tile, or nothing.
+FREE_SPOT = """
+local s = game.surfaces.nauvis
+local f = game.forces.player
+local function free(x0, y0)
+  for _, e in pairs(s.find_entities_filtered{area = {{x0 - 1, y0 - 1}, {x0 + W + 1, y0 + H + 1}}}) do
+    if e.type ~= "resource" and e.type ~= "character" and not e.type:find("robot") then return false end
+  end
+  for x = x0, x0 + W - 1 do for y = y0, y0 + H - 1 do
+    if not s.can_place_entity{name = "iron-chest", position = {x + 0.5, y + 0.5}, force = f, build_check_type = defines.build_check_type.manual_ghost} then return false end
+  end end
+  local nets = s.find_logistic_networks_by_construction_area({x0 + W / 2, y0 + H / 2}, f)
+  return nets[1] ~= nil and nets[1].available_construction_robots > 0
+end
+local ports = s.find_entities_filtered{type = "roboport", force = "player"}
+table.sort(ports, function(a, b) return a.unit_number < b.unit_number end)
+for _, r in ipairs(ports) do
+  for ring = 6, 40, 2 do
+    for dx = -ring, ring, 2 do
+      for _, dy in ipairs{-ring, ring} do
+        local x, y = math.floor(r.position.x) + dx, math.floor(r.position.y) + dy
+        if free(x, y) then rcon.print(x .. "," .. y) return end
+        x, y = math.floor(r.position.x) + dy, math.floor(r.position.y) + dx
+        if free(x, y) then rcon.print(x .. "," .. y) return end
+      end
+    end
+  end
+end
+"""
+
+BUILT = """
+local s = game.surfaces.nauvis
+local out = {ghosts = 0, built = {}}
+for _, e in pairs(s.find_entities_filtered{area = AREA}) do
+  if e.name == "entity-ghost" then out.ghosts = out.ghosts + 1
+  elseif e.type ~= "resource" and e.type ~= "character" and not e.type:find("robot") then
+    local r = {name = e.name, x = e.position.x, y = e.position.y, direction = e.direction}
+    if e.type == "inserter" then r.pick = {e.pickup_position.x, e.pickup_position.y} r.drop = {e.drop_position.x, e.drop_position.y} end
+    if e.type == "underground-belt" then r.ug = e.belt_to_ground_type r.linked = e.underground_belt_neighbour ~= nil end
+    if e.type == "assembling-machine" then local rec = e.get_recipe() r.recipe = rec and rec.name end
+    out.built[#out.built + 1] = r
+  end
+end
+rcon.print(helpers.table_to_json(out))
+"""
+
+
+def robot_cell(ox, oy):
+    """A chest, an arm, an assembler, an arm and a chest in a row, and under it a belt run with an underground hop."""
+    return [chest(ox + 0.5, oy + 0.5), ins(ox + 1.5, oy + 0.5, [1, 0]),
+            ent("assembling-machine-1", ox + 3.5, oy + 0.5, {"recipe": "iron-gear-wheel"}),
+            ins(ox + 5.5, oy + 0.5, [1, 0]), chest(ox + 6.5, oy + 0.5),
+            belt(ox + 0.5, oy + 4.5, [1, 0]), belt(ox + 1.5, oy + 4.5, [1, 0]), ug(ox + 2.5, oy + 4.5, [1, 0], "entry"),
+            ug(ox + 5.5, oy + 4.5, [1, 0], "exit"), belt(ox + 6.5, oy + 4.5, [1, 0])]
+
+
+@fixture(source=SEEDED, tags={"tools", "build", "slow"}, camera=True)
+def build_route_robots_flow(lab):
+    """A route with an underground hop, placed by `place` and built by robots, carries a plate from its first belt to its last."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    w, h = 14, 9
+    spot = lab.lua(f"W = {w}\nH = {h}\n" + FREE_SPOT).strip()
+    if not spot:
+        return Result(False, "no free spot in reach of a roboport with robots")
+    ox, oy = (int(v) for v in spot.split(","))
+    lab.lua(f"""local s = game.surfaces.nauvis
+for x = {ox + 5}, {ox + 7} do for y = {oy}, {oy + h - 1} do s.create_entity{{name = "iron-chest", position = {{x + 0.5, y + 0.5}}, force = "player"}} end end""")
+    routed, ms = call(lab, "route", **route_args("nauvis", (ox, oy + 4), (ox + w - 1, oy + 4), (ox, oy, ox + w - 1, oy + h - 1)))
+    if "error" in routed:
+        return Result(False, f"no route: {routed}")
+    placed = tools.call(lab, "place", list=lst(routed["list"]))
+    t0, ticks = time.time(), 0
+    area = f"{{{{{ox - 1}, {oy - 1}}}, {{{ox + w + 1}, {oy + h + 1}}}}}"
+    while ticks < 7200:
+        lab.advance(300)
+        ticks += 300
+        state = json.loads(lab.lua(f"AREA = {area}\n" + BUILT))
+        if state["ghosts"] == 0:
+            break
+    first, last = routed["list"][0]["position"], routed["list"][-1]["position"]
+    lab.lua(f"""local s = game.surfaces.nauvis
+s.find_entities_filtered{{name = "transport-belt", position = {{{first[0]}, {first[1]}}}}}[1].get_transport_line(1).insert_at_back{{name = "iron-plate"}}""")
+    lab.advance(900)
+    carried = lab.lua(f"""local s = game.surfaces.nauvis
+local b = s.find_entities_filtered{{name = "transport-belt", position = {{{last[0]}, {last[1]}}}}}[1]
+local n = 0
+for i = 1, b.get_max_transport_line_index() do n = n + b.get_transport_line(i).get_item_count("iron-plate") end
+rcon.print(n)""").strip()
+    ok = (routed["ok"] and routed["undergrounds"] == 1 and placed.get("ok") and state["ghosts"] == 0 and carried == "1")
+    return finish(lab, ok, f"spot ({ox}, {oy}); route length {routed['length']}, undergrounds {routed['undergrounds']}; "
+                           f"{placed.get('summary')}; ghosts left {state['ghosts']} after {ticks} ticks ({time.time() - t0:.0f} s); "
+                           f"plates on the last belt {carried}", {"ticks": ticks, "spot": [ox, oy]})
+
+
+@fixture(source=SEEDED, tags={"tools", "build", "slow"}, camera=True)
+def build_place_robots_build(lab):
+    """A list placed by `place` inside run4's robot network is built by construction robots with the arms facing as checked."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    w, h = 9, 7
+    spot = lab.lua(f"W = {w}\nH = {h}\n" + FREE_SPOT).strip()
+    if not spot:
+        return Result(False, "no free spot in reach of a roboport with robots")
+    ox, oy = (int(v) for v in spot.split(","))
+    entries = robot_cell(ox, oy)
+    area = f"{{{{{ox - 1}, {oy - 1}}}, {{{ox + w + 1}, {oy + h + 1}}}}}"
+    res, ms = call(lab, "place", list=entries)
+    if not res.get("ok"):
+        return Result(False, f"place refused at ({ox}, {oy}): {res.get('summary')} {res.get('issues')}")
+    t0, ticks = time.time(), 0
+    while ticks < 7200:
+        lab.advance(300)
+        ticks += 300
+        state = json.loads(lab.lua(f"AREA = {area}\n" + BUILT))
+        if state["ghosts"] == 0:
+            break
+    built = {(b["name"], b["x"], b["y"]): b for b in lst(state["built"])}
+    want = {(e["name"], e["position"][0], e["position"][1]) for e in entries}
+    arms = [b for b in built.values() if b["name"] == "inserter"]
+    arms_ok = all(abs(a["pick"][0] - (a["x"] - 1)) < 0.3 and abs(a["drop"][0] - (a["x"] + 1)) < 0.3
+                  and abs(a["pick"][1] - a["y"]) < 0.3 for a in arms)
+    ugs = sorted(b["ug"] for b in built.values() if b["name"] == "underground-belt")
+    linked = all(b["linked"] for b in built.values() if b["name"] == "underground-belt")
+    recipe = [b["recipe"] for b in built.values() if b["name"] == "assembling-machine-1"]
+    ok = (state["ghosts"] == 0 and set(built) == want and len(arms) == 2 and arms_ok and ugs == ["input", "output"]
+          and linked and recipe == ["iron-gear-wheel"] and not res.get("warn"))
+    return finish(lab, ok, f"spot ({ox}, {oy}); {res['summary']}; ghosts left {state['ghosts']} after {ticks} ticks "
+                           f"({time.time() - t0:.0f} s); built {len(built)} of {len(want)}; arms ok {arms_ok}; undergrounds {ugs} "
+                           f"linked {linked}; recipe {recipe}; warn {res.get('warn')}", {"ticks": ticks, "spot": [ox, oy]})

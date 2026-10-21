@@ -3,7 +3,7 @@
 --- effect: act
 --- summary: place a build list as ghosts after the whole list passes check; one bad entry places nothing
 --- args: list (the check format); surface (default nauvis); force (default player); accept (codes allowed on every entry)
---- returns: {ok, placed = {{i, name, position, direction, unit_number}}, issues = {{i, name, position, code, msg}}, summary, warn} or {error, hint}
+--- returns: {ok, placed = {{i, name, position, direction, unit_number}}, bom, issues = {{i, name, position, code, msg}}, summary, warn} or {error, hint}
 --- uses: intent
 -- Only entity-ghosts are created, so robots build from stock. A ghost the engine refuses after a clean check
 -- rolls back every ghost this call made.
@@ -44,5 +44,5 @@ local uncovered = 0
 for _, g in ipairs(made) do
   if #a.surface.find_logistic_networks_by_construction_area(g.position, a.force) == 0 then uncovered = uncovered + 1 end
 end
-return {ok = true, placed = placed, summary = string.format("placed %d ghosts; %s", #placed, res.summary),
+return {ok = true, placed = placed, bom = res.bom, summary = string.format("placed %d ghosts; %s", #placed, res.summary),
   warn = uncovered > 0 and string.format("%d of %d ghosts are outside every roboport's construction area: robots will not build them", uncovered, #placed) or nil}
