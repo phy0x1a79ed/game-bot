@@ -3,7 +3,7 @@
 --- effect: read
 --- summary: check a build list against stated intent: direction, reach, pairing, fluids, power, collisions
 --- args: none (a lib: use("intent").check(surface, force, list, {accept = codes}))
---- returns: {check, prepare, occupied, failures}
+--- returns: {MAX_ENTRIES, check, prepare, occupied, tile_free, failures}
 -- The checker behind check, route and place. A pure read.
 -- check(surface, force, list, opts) returns {ok, entries = {{i, ok, direction, dir, type, position, issues}}, bom, summary}.
 -- Each list entry is {name =, position = {x, y}, intent = {...}, accept = {CODE, ...}, direction = <optional raw>}:
@@ -78,9 +78,9 @@ local function dir_for(nv, card)
 end
 local function dir_of_card(card) return dir_for({0, -1}, card) end
 
-local function box(proto, d, p)
-  local b = proto.collision_box
-  local a, c = rot({b.left_top.x, b.left_top.y}, d), rot({b.right_bottom.x, b.right_bottom.y}, d)
+local function box(st, d, p)
+  local b = st.cb
+  local a, c = rot({b[1], b[2]}, d), rot({b[3], b[4]}, d)
   return {math.min(a[1], c[1]) + p[1], math.min(a[2], c[2]) + p[2], math.max(a[1], c[1]) + p[1], math.max(a[2], c[2]) + p[2]}
 end
 local function contains(bx, p) return p[1] > bx[1] + EPS and p[1] < bx[3] - EPS and p[2] > bx[2] + EPS and p[2] < bx[4] - EPS end
@@ -101,28 +101,50 @@ local function ename(e) return e.name == "entity-ghost" and e.ghost_name .. " gh
 local function etype(e) return e.name == "entity-ghost" and e.ghost_type or e.type end
 local function eproto(e) return e.name == "entity-ghost" and e.ghost_prototype or e.prototype end
 
--- the underground connection of a pipe-to-ground prototype, as {direction, max} for a north-facing entity
-local function underground_conn(proto)
-  for _, fb in pairs(proto.fluidbox_prototypes or {}) do
-    for _, c in pairs(fb.pipe_connections or {}) do
-      if c.connection_type == "underground" then return {direction = c.direction, max = c.max_underground_distance} end
+-- what a prototype says that never changes, read once per name: reading it again builds a fresh table from the engine each time
+local STATIC = {}
+local function static(proto)
+  local c = STATIC[proto.name]
+  if c then return c end
+  local b = proto.collision_box
+  c = {cb = {b.left_top.x, b.left_top.y, b.right_bottom.x, b.right_bottom.y}, layers = layers(proto)}
+  local items = proto.items_to_place_this
+  c.item = items and items[1] and {name = items[1].name, count = items[1].count} or nil
+  c.placeable = c.item ~= nil and proto.flags ~= nil and proto.flags["player-creation"] == true
+  c.boxes, c.conns, c.ug = {}, {}, false
+  for k, fb in pairs(proto.fluidbox_prototypes or {}) do
+    c.boxes[#c.boxes + 1] = {key = fb.index or k, filter = fb.filter and fb.filter.name}
+    for _, pc in pairs(fb.pipe_connections or {}) do
+      local kind = pc.connection_type or "normal"
+      if kind == "underground" then
+        c.ug = c.ug or {direction = pc.direction, max = pc.max_underground_distance}
+      elseif kind == "normal" and pc.direction then
+        local rel = {}
+        for d = 0, 12, 4 do
+          rel[d] = V(pc.positions and pc.positions[d / 4 + 1] or rot(V(pc.position) or {0, 0}, d))
+        end
+        c.conns[#c.conns + 1] = {fb = fb.index or k, direction = pc.direction, rel = rel}
+      end
     end
   end
+  STATIC[proto.name] = c
+  return c
 end
+local function static_of(w)
+  local c = STATIC[w.name == "entity-ghost" and w.ghost_name or w.name]
+  return c or static(eproto(w))
+end
+
+-- the underground connection of a pipe-to-ground prototype, as {direction, max} for a north-facing entity
+local function underground_conn(proto) return static(proto).ug or nil end
 
 -- normal pipe connections of proto facing d at p: {fb, from = tile centre inside, target = tile centre outside}
 local function pipe_conns(proto, d, p)
   local out = {}
-  for k, fb in pairs(proto.fluidbox_prototypes or {}) do
-    for _, c in pairs(fb.pipe_connections or {}) do
-      if (c.connection_type or "normal") == "normal" and c.direction then
-        local rel = c.positions and c.positions[math.floor(d / 4) + 1] or rot(V(c.position) or {0, 0}, d)
-        rel = V(rel)
-        local from = add(p, rel)
-        local cd = (c.direction + d) % 16
-        if CARD[cd] then out[#out + 1] = {fb = fb.index or k, from = from, target = add(from, CARD[cd])} end
-      end
-    end
+  for _, c in ipairs(static(proto).conns) do
+    local from = add(p, c.rel[d])
+    local cd = (c.direction + d) % 16
+    if CARD[cd] then out[#out + 1] = {fb = c.fb, from = from, target = add(from, CARD[cd])} end
   end
   return out
 end
@@ -130,15 +152,34 @@ end
 -- the fluid in world entity e's storage j, or in the segment it belongs to, or its filter (2.1 fluid API)
 local function world_fluid(e, j)
   for _, get in pairs{"get_fluid_segment_fluid", "get_fluid", "get_fluid_segment_filter", "get_fluid_filter"} do
-    local ok, fl = pcall(e[get], j)
+    local ok, fl = pcall(function() return e[get](j) end)
     if ok and fl and fl.name then return fl.name end
   end
 end
+
+-- tile_free(x, y): whether the ground at a tile lets an entity like proto stand there (water, space and the map edge share layers with it)
+local function tile_free(s, proto)
+  local mine, verdict = layers(proto), {}
+  return function(x, y)
+    local name = s.get_tile(x, y).name
+    local v = verdict[name]
+    if v == nil then
+      local tp = prototypes.tile[name]
+      v = not (tp and shares(mine, layers(tp)))
+      verdict[name] = v
+    end
+    return v
+  end
+end
+
+-- a player can build it: an item places it and the prototype carries the player-creation flag
+local function placeable(proto) return static(proto).placeable end
 
 local function check(surface, force, list, opts)
   local s = (type(surface) == "string" or surface == nil) and game.surfaces[surface or "nauvis"] or surface
   local f = (type(force) == "string" or force == nil) and game.forces[force or "player"] or force
   local E, bom = {}, {}
+  local grounds = {}
   local every = {}
   for _, c in pairs(opts and opts.accept or {}) do every[c] = true end
 
@@ -153,10 +194,13 @@ local function check(surface, force, list, opts)
     for _, c in pairs(raw.accept or {}) do e.accept[c] = true end
     for c in pairs(every) do e.accept[c] = true end
     E[i] = e
-    local proto = prototypes.entity[raw.name or ""]
+    local proto = type(raw.name) == "string" and prototypes.entity[raw.name] or nil
     local p = V(raw.position)
     if not proto then
       issue(e, "BAD_INTENT", "no entity named " .. tostring(raw.name))
+    elseif not placeable(proto) then
+      proto = nil
+      issue(e, "BAD_INTENT", tostring(raw.name) .. " is not something a player can build")
     elseif not p then
       issue(e, "BAD_INTENT", "position must be {x, y}")
     else
@@ -204,37 +248,97 @@ local function check(surface, force, list, opts)
       end
       e.d = d or 0
       e.pos = on_grid(proto, e.d, p[1], p[2])
-      e.box = box(proto, e.d, e.pos)
-      e.layers = layers(proto)
-      local item = proto.items_to_place_this and proto.items_to_place_this[1]
+      local st = static(proto)
+      e.box = box(st, e.d, e.pos)
+      e.layers = st.layers
+      grounds[proto.name] = grounds[proto.name] or tile_free(s, proto)
+      e.ground = grounds[proto.name]
+      local item = st.item
       if item then bom[item.name] = (bom[item.name] or 0) + (item.count or 1) end
     end
   end
 
   local function valid(e) return e.proto ~= nil end
-  local function list_at(p, pred)
-    for _, o in ipairs(E) do
-      if valid(o) and contains(o.box, p) and (not pred or pred(o)) then return o end
+  -- the entries by the tiles their boxes cover, in list order
+  local by_tile = {}
+  local function tile_key(x, y) return x * 65536 + y end
+  for _, o in ipairs(E) do
+    if valid(o) then
+      local b = o.box
+      for x = math.floor(b[1] + EPS), math.ceil(b[3] - EPS) - 1 do
+        for y = math.floor(b[2] + EPS), math.ceil(b[4] - EPS) - 1 do
+          local k = tile_key(x, y)
+          local t = by_tile[k]
+          if not t then t = {} by_tile[k] = t end
+          t[#t + 1] = o
+        end
+      end
     end
   end
-  local function world_at(p)
-    local out = {}
-    for _, w in pairs(s.find_entities_filtered{position = p}) do
-      if w.type ~= "resource" and w.type ~= "item-entity" and w.type ~= "corpse" and w.type ~= "character"
-        and not w.type:find("robot") then out[#out + 1] = w end
+  local function list_at(p, pred)
+    local t = by_tile[tile_key(math.floor(p[1]), math.floor(p[2]))]
+    if not t then return nil end
+    for _, o in ipairs(t) do
+      if contains(o.box, p) and (not pred or pred(o)) then return o end
     end
+  end
+  -- the world, fetched one 16 x 16 tile block at a time and indexed by the tiles each entity's collision box covers
+  local BLOCK = 16
+  local blocks, world_tiles = {}, {}
+  local function load_block(bx, by)
+    local bk = tile_key(bx, by)
+    if blocks[bk] then return end
+    blocks[bk] = true
+    local x0, y0 = bx * BLOCK, by * BLOCK
+    for _, w in pairs(s.find_entities_filtered{area = {{x0, y0}, {x0 + BLOCK, y0 + BLOCK}}}) do
+      local t = w.type
+      if t ~= "character" and not t:find("robot") then
+        local st = static_of(w)
+        local rec = {w = w, box = box(st, w.direction, epos(w)), layers = st.layers,
+          item_less = t == "resource" or t == "item-entity" or t == "corpse"}
+        local b = rec.box
+        for x = math.max(math.floor(b[1] + EPS), x0), math.min(math.ceil(b[3] - EPS) - 1, x0 + BLOCK - 1) do
+          for y = math.max(math.floor(b[2] + EPS), y0), math.min(math.ceil(b[4] - EPS) - 1, y0 + BLOCK - 1) do
+            local k = tile_key(x, y)
+            local list = world_tiles[k]
+            if not list then list = {} world_tiles[k] = list end
+            list[#list + 1] = rec
+          end
+        end
+      end
+    end
+  end
+  local function world_tile(x, y)
+    load_block(math.floor(x / BLOCK), math.floor(y / BLOCK))
+    return world_tiles[tile_key(x, y)]
+  end
+  local world_cache = {}
+  local function world_at(p)
+    local ck = string.format("%.3f,%.3f", p[1], p[2])
+    local out = world_cache[ck]
+    if out then return out end
+    out = {}
+    for _, rec in ipairs(world_tile(math.floor(p[1]), math.floor(p[2])) or {}) do
+      if not rec.item_less and contains(rec.box, p) then out[#out + 1] = rec.w end
+    end
+    world_cache[ck] = out
     return out
   end
 
   -- 1. collisions inside the list
-  for a = 1, #E do
-    local A = E[a]
-    if valid(A) then
-      for b = a + 1, #E do
-        local B = E[b]
-        if valid(B) and overlap(A.box, B.box) and shares(A.layers, B.layers) then
-          issue(A, "COLLIDES_LIST", string.format("%s at %s overlaps entry %d (%s at %s): move one of them", A.name, at(A.pos), b, B.name, at(B.pos)))
-          issue(B, "COLLIDES_LIST", string.format("%s at %s overlaps entry %d (%s at %s): move one of them", B.name, at(B.pos), a, A.name, at(A.pos)))
+  local tested = {}
+  for _, bucket in pairs(by_tile) do
+    for x = 1, #bucket - 1 do
+      for y = x + 1, #bucket do
+        local A, B = bucket[x], bucket[y]
+        if A.i > B.i then A, B = B, A end
+        local pair = A.i * 4096 + B.i
+        if not tested[pair] then
+          tested[pair] = true
+          if overlap(A.box, B.box) and shares(A.layers, B.layers) then
+            issue(A, "COLLIDES_LIST", string.format("%s at %s overlaps entry %d (%s at %s): move one of them", A.name, at(A.pos), B.i, B.name, at(B.pos)))
+            issue(B, "COLLIDES_LIST", string.format("%s at %s overlaps entry %d (%s at %s): move one of them", B.name, at(B.pos), A.i, A.name, at(A.pos)))
+          end
         end
       end
     end
@@ -244,21 +348,23 @@ local function check(surface, force, list, opts)
   for _, e in ipairs(E) do
     if valid(e) then
       local bx = e.box
-      local area = {{bx[1] + EPS, bx[2] + EPS}, {bx[3] - EPS, bx[4] - EPS}}
-      local hit = false
-      for _, w in pairs(s.find_entities_filtered{area = area}) do
-        local wp = eproto(w)
-        if wp and w.type ~= "character" and not w.type:find("robot") and shares(e.layers, layers(wp)) then
-          hit = true
-          issue(e, "COLLIDES_WORLD", string.format("%s at %s is blocked by %s at %s: pick a free spot or remove it first",
-            e.name, at(e.pos), ename(w), at(epos(w))))
+      local hit, seen, blocked = false, {}, 0
+      for x = math.floor(bx[1] + EPS), math.ceil(bx[3] - EPS) - 1 do
+        for y = math.floor(bx[2] + EPS), math.ceil(bx[4] - EPS) - 1 do
+          for _, rec in ipairs(world_tile(x, y) or {}) do
+            if not seen[rec] and overlap(bx, rec.box) and shares(e.layers, rec.layers) then
+              seen[rec] = true
+              hit = true
+              issue(e, "COLLIDES_WORLD", string.format("%s at %s is blocked by %s at %s: pick a free spot or remove it first",
+                e.name, at(e.pos), ename(rec.w), at(epos(rec.w))))
+            end
+          end
+          if not e.ground(x, y) then blocked = blocked + 1 end
         end
       end
-      local ls = {} for l in pairs(e.layers) do ls[#ls + 1] = l end
-      local water = #ls > 0 and s.count_tiles_filtered{area = area, collision_mask = ls} or 0
-      if water > 0 then
+      if blocked > 0 then
         hit = true
-        issue(e, "COLLIDES_WORLD", string.format("%s at %s sits on %d tile(s) it cannot be built on (water or similar)", e.name, at(e.pos), water))
+        issue(e, "COLLIDES_WORLD", string.format("%s at %s sits on %d tile(s) it cannot be built on (water or similar)", e.name, at(e.pos), blocked))
       end
       if not hit and e.type ~= "mining-drill" and not s.can_place_entity{name = e.name, position = e.pos, direction = e.d,
           force = f, build_check_type = defines.build_check_type.manual_ghost} then
@@ -492,18 +598,25 @@ local function check(surface, force, list, opts)
   -- 6. undergrounds: belts pair entry to exit along the flow, pipes pair along `toward`
   local function walk_pair(e, step, maxd, same_way)
     -- first underground of this name along step, from the list or the world; returns it, its distance, whether it pairs
-    for k = 1, math.max(2 * maxd, 12) do
+    local K = math.max(2 * maxd, 12)
+    local ax, bx = e.pos[1] + step[1] * 0.6, e.pos[1] + step[1] * (K + 0.4)
+    local ay, by = e.pos[2] + step[2] * 0.6, e.pos[2] + step[2] * (K + 0.4)
+    local x0, x1, y0, y1 = math.min(ax, bx), math.max(ax, bx), math.min(ay, by), math.max(ay, by)
+    if step[1] == 0 then x0, x1 = e.pos[1] - 0.4, e.pos[1] + 0.4 else y0, y1 = e.pos[2] - 0.4, e.pos[2] + 0.4 end
+    local along = {}
+    for _, w in pairs(s.find_entities_filtered{area = {{x0, y0}, {x1, y1}}, name = e.name}) do
+      local k = math.floor((w.position.x - e.pos[1]) * step[1] + (w.position.y - e.pos[2]) * step[2] + 0.5)
+      along[k] = w
+    end
+    for k = 1, K do
       local p = add(e.pos, scale(step, k))
       local o = list_at(p, function(x) return x.name == e.name end)
       local cand
       if o then cand = {d = o.d, role = o.role, pos = o.pos, what = "entry " .. o.i}
-      else
-        for _, w in pairs(world_at(p)) do
-          if ename(w) == e.name or w.name == e.name then
-            cand = {d = w.direction, role = w.type == "underground-belt" and w.belt_to_ground_type or nil, pos = epos(w),
-              what = "existing " .. ename(w)}
-          end
-        end
+      elseif along[k] then
+        local w = along[k]
+        cand = {d = w.direction, role = w.type == "underground-belt" and w.belt_to_ground_type or nil, pos = epos(w),
+          what = "existing " .. ename(w)}
       end
       if cand then
         local pairs_ok = same_way(cand)
@@ -565,12 +678,12 @@ local function check(surface, force, list, opts)
   local function touch(x, fluid, where) fluids[x] = fluids[x] or {} fluids[x][fluid] = fluids[x][fluid] or where end
   local conns = {}
   for _, e in ipairs(E) do
-    if valid(e) and e.proto.fluidbox_prototypes and #e.proto.fluidbox_prototypes > 0 then
+    if valid(e) and #static(e.proto).boxes > 0 then
       e.fluid = true
-      for k, fb in pairs(e.proto.fluidbox_prototypes) do
-        local x = key(e.i, fb.index or k)
+      for _, fb in ipairs(static(e.proto).boxes) do
+        local x = key(e.i, fb.key)
         parent[x] = x
-        if fb.filter then touch(x, fb.filter.name, e.name .. " (entry " .. e.i .. ")") end
+        if fb.filter then touch(x, fb.filter, e.name .. " (entry " .. e.i .. ")") end
       end
       conns[e.i] = pipe_conns(e.proto, e.d, e.pos)
     end
@@ -585,9 +698,9 @@ local function check(surface, force, list, opts)
         end
       else
         for _, w in pairs(world_at(c.target)) do
-          if w.name ~= "entity-ghost" and #(w.prototype.fluidbox_prototypes or {}) > 0 then
+          if w.name ~= "entity-ghost" and #static(w.prototype).boxes > 0 then
             for j = 1, w.fluids_count do
-              local okc, wcs = pcall(w.get_fluid_box_pipe_connections, j)
+              local okc, wcs = pcall(function() return w.get_fluid_box_pipe_connections(j) end)
               for _, wc in pairs(okc and wcs or {}) do
                 if (wc.connection_type or "normal") == "normal" and same_tile(V(wc.target_position), c.from) then
                   local fl = world_fluid(w, j)
@@ -641,25 +754,44 @@ local function check(surface, force, list, opts)
       if dist <= math.min(r, reach(w.prototype)) + 1e-6 then linked[e.i] = true end
     end
   end
-  local grew = true
-  while grew do
-    grew = false
-    for _, a in ipairs(poles) do
-      if not linked[a.i] then
-        for _, b in ipairs(poles) do
-          if linked[b.i] then
+  local cell = 1
+  for _, e in ipairs(poles) do cell = math.max(cell, reach(e.proto)) end
+  local grid = {}
+  local function cell_of(p) return math.floor(p[1] / cell), math.floor(p[2] / cell) end
+  for _, e in ipairs(poles) do
+    local cx, cy = cell_of(e.pos)
+    local k = tile_key(cx, cy)
+    grid[k] = grid[k] or {}
+    grid[k][#grid[k] + 1] = e
+  end
+  local queue = {}
+  for _, e in ipairs(poles) do if linked[e.i] then queue[#queue + 1] = e end end
+  local head = 1
+  while head <= #queue do
+    local a = queue[head]
+    head = head + 1
+    local cx, cy = cell_of(a.pos)
+    for dx = -1, 1 do
+      for dy = -1, 1 do
+        for _, b in ipairs(grid[tile_key(cx + dx, cy + dy)] or {}) do
+          if not linked[b.i] then
             local dist = math.sqrt((a.pos[1] - b.pos[1]) ^ 2 + (a.pos[2] - b.pos[2]) ^ 2)
-            if dist <= math.min(reach(a.proto), reach(b.proto)) + 1e-6 then linked[a.i], grew = true, true break end
+            if dist <= math.min(reach(a.proto), reach(b.proto)) + 1e-6 then
+              linked[b.i] = true
+              queue[#queue + 1] = b
+            end
           end
         end
       end
     end
   end
+  local hints = 0
   for _, e in ipairs(poles) do
     if not linked[e.i] then
-      local near = s.find_entities_filtered{position = e.pos, radius = 64, type = "electric-pole", force = f}
+      hints = hints + 1
+      local near = hints <= 5 and s.find_entities_filtered{position = e.pos, radius = 64, type = "electric-pole", force = f} or {}
       local best = near[1] and s.get_closest(e.pos, near)
-      local hint = "; no pole within 64 tiles"
+      local hint = hints <= 5 and "; no pole within 64 tiles" or ""
       if best then
         local dist = math.sqrt((best.position.x - e.pos[1]) ^ 2 + (best.position.y - e.pos[2]) ^ 2)
         hint = string.format("; nearest is %s at %s, %.1f tiles away, and the wire reaches %.1f: add a pole between",
@@ -715,12 +847,14 @@ local function check(surface, force, list, opts)
   return {ok = nok == #E, entries = out, bom = bom, counts = counts, summary = summary}
 end
 
-local MAX_ENTRIES = 2000
+local MAX_ENTRIES = 200
 
 -- the surface, force, list and accept of a tool call, or nil and an {error, hint} table
 local function prepare(a)
   local function bad(msg, hint) return nil, {error = msg, hint = hint} end
   if type(a) ~= "table" then return bad("no arguments", "pass a table with a list of entries") end
+  if a.surface ~= nil and type(a.surface) ~= "string" then return bad("surface must be a name", "for example \"nauvis\"") end
+  if a.force ~= nil and type(a.force) ~= "string" then return bad("force must be a name", "for example \"player\"") end
   local s = a.surface == nil and game.surfaces.nauvis or game.surfaces[a.surface]
   if not s then
     local names = {}
@@ -734,9 +868,17 @@ local function prepare(a)
   if type(list) ~= "table" or #list == 0 or next(list, #list) ~= nil then
     return bad("list must be a non-empty array of entries", "each entry is {name, position = {x, y}, intent = {...}}")
   end
-  if #list > MAX_ENTRIES then return bad(#list .. " entries is too many", "send at most " .. MAX_ENTRIES .. " per call") end
+  if #list > MAX_ENTRIES then return bad(#list .. " entries is too many", "send at most " .. MAX_ENTRIES .. " per call, in several calls") end
   for i, raw in ipairs(list) do
     if type(raw) ~= "table" then return bad("entry " .. i .. " is not a table", "each entry is {name, position = {x, y}, intent = {...}}") end
+    if raw.name ~= nil and type(raw.name) ~= "string" then return bad("entry " .. i .. " has a non-text name", "name is an entity name such as transport-belt") end
+    if type(raw.intent) == "table" then
+      for _, key in ipairs{"item", "recipe", "role"} do
+        if raw.intent[key] ~= nil and type(raw.intent[key]) ~= "string" then
+          return bad("entry " .. i .. " has a non-text intent." .. key, "intent." .. key .. " is a name")
+        end
+      end
+    end
     if raw.intent ~= nil and type(raw.intent) ~= "table" then return bad("entry " .. i .. " has a non-table intent", "intent is a table such as {flow = {1, 0}}") end
     if raw.accept ~= nil and type(raw.accept) ~= "table" then return bad("entry " .. i .. " has a non-list accept", "accept is a list of codes") end
   end
@@ -746,12 +888,12 @@ end
 
 -- the tiles a 1x1 entity like proto cannot take in area because a world entity shares its collision layers; returns taken(x, y)
 local function occupied(s, proto, area)
-  local mine = layers(proto)
+  local mine = static(proto).layers
   local set = {}
   for _, w in pairs(s.find_entities_filtered{area = area}) do
-    local wp = eproto(w)
-    if wp and w.type ~= "character" and not w.type:find("robot") and shares(mine, layers(wp)) then
-      local b = box(wp, w.direction, epos(w))
+    local st = w.type ~= "character" and not w.type:find("robot") and static_of(w)
+    if st and shares(mine, st.layers) then
+      local b = box(st, w.direction, epos(w))
       for x = math.floor(b[1] + EPS), math.ceil(b[3] - EPS) - 1 do
         for y = math.floor(b[2] + EPS), math.ceil(b[4] - EPS) - 1 do set[x * 65536 + y] = true end
       end
@@ -771,4 +913,4 @@ local function failures(list, res)
   return out
 end
 
-return {check = check, prepare = prepare, occupied = occupied, failures = failures}
+return {MAX_ENTRIES = MAX_ENTRIES, check = check, prepare = prepare, occupied = occupied, tile_free = tile_free, failures = failures}

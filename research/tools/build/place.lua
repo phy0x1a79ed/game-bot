@@ -25,24 +25,32 @@ local function rollback(i, why)
   return {ok = false, placed = {}, summary = "nothing placed: the engine refused entry " .. i,
     issues = {{i = i, name = raw.name, position = res.entries[i].position, code = "ENGINE_REFUSED", msg = why}}}
 end
-for i, r in ipairs(res.entries) do
-  local raw = a.list[i]
-  local spec = {name = "entity-ghost", inner_name = raw.name, position = r.position, direction = r.direction, force = a.force}
-  if r.type then spec.type = r.type end
-  local g = a.surface.create_entity(spec)
-  if not g then return rollback(i, "create_entity returned nothing for the ghost of " .. raw.name) end
-  made[#made + 1] = g
-  local recipe = raw.intent and raw.intent.recipe
-  if recipe then
-    local set, why = pcall(g.set_recipe, recipe)
-    if not set then return rollback(i, "recipe " .. recipe .. ": " .. tostring(why)) end
+local at_entry, refused = 0, nil
+local ran, raised = pcall(function()
+  for i, r in ipairs(res.entries) do
+    at_entry = i
+    local raw = a.list[i]
+    local spec = {name = "entity-ghost", inner_name = raw.name, position = r.position, direction = r.direction, force = a.force}
+    if r.type then spec.type = r.type end
+    local g = a.surface.create_entity(spec)
+    if not g then refused = "create_entity returned nothing for the ghost of " .. raw.name return end
+    made[#made + 1] = g
+    local recipe = raw.intent and raw.intent.recipe
+    if recipe then
+      local set, why = pcall(g.set_recipe, recipe)
+      if not set then refused = "recipe " .. recipe .. ": " .. tostring(why) return end
+    end
+    placed[#placed + 1] = {i = i, name = raw.name, position = r.position, direction = r.direction, unit_number = g.unit_number}
   end
-  placed[#placed + 1] = {i = i, name = raw.name, position = r.position, direction = r.direction, unit_number = g.unit_number}
-end
+end)
+if not ran then return rollback(at_entry, "create_entity raised: " .. tostring(raised):sub(1, 200)) end
+if refused then return rollback(at_entry, refused) end
 
 local uncovered = 0
-for _, g in ipairs(made) do
-  if #a.surface.find_logistic_networks_by_construction_area(g.position, a.force) == 0 then uncovered = uncovered + 1 end
-end
+pcall(function()
+  for _, g in ipairs(made) do
+    if #a.surface.find_logistic_networks_by_construction_area(g.position, a.force) == 0 then uncovered = uncovered + 1 end
+  end
+end)
 return {ok = true, placed = placed, bom = res.bom, summary = string.format("placed %d ghosts; %s", #placed, res.summary),
   warn = uncovered > 0 and string.format("%d of %d ghosts are outside every roboport's construction area: robots will not build them", uncovered, #placed) or nil}
