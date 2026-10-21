@@ -5,14 +5,12 @@ and shares nothing with `bench.py`, so the bench never grades itself. Rates are 
 that really elapsed between two reads. A fixture reports every measured number in `data`.
 """
 
-import fcntl
 import json
 import math
 import statistics
 import time
 from pathlib import Path
 
-from .. import lab as labmod
 from ..lab import SbxError
 from .registry import Result, fixture
 from .slice import timed
@@ -25,7 +23,6 @@ RATE_FLOOR = 0.01
 STOCK_FLOOR = 1.0
 CEILING_SLACK = 1.005
 SATURATED = 0.98
-LAB = {"cpus": 3, "memory": "6g"}
 MARGIN = 32
 F5_CAP_MINUTES = 15
 F4_OFFSETS = (3, 7)
@@ -48,36 +45,13 @@ def listing(x):
 
 
 def sized(lab):
-    """Bring the lab up again with the fidelity resources unless it already runs with them."""
-    out = labmod.docker("inspect", "-f", "{{.HostConfig.NanoCpus}} {{.HostConfig.Memory}}", lab.container)
-    cpus, memory = (int(v) for v in out.split())
-    if cpus == int(LAB["cpus"] * 1e9) and memory == 6 * 1024 ** 3:
-        return lab
-    lab.down()
-    return lab.up(save=SAVE, **LAB)
+    """The lab, brought up on the fidelity save unless it already runs."""
+    return lab if lab.running() else lab.up(save=SAVE)
 
 
 def restart(lab):
-    """Kill the lab's server and start it again on its original save, so the world is exactly as at first load."""
-    lab.close()
-    seen = lab.logs(200000).count("to(InGame)")
-    # the lease counts running servers: hold its lock from the kill to the start so no other worktree takes the slot
-    with open(labmod.SHARED / "lease.lock", "w") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            labmod.docker("kill", lab.container)
-            labmod.docker("start", lab.container)
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
-    deadline = time.time() + 180
-    while lab.logs(200000).count("to(InGame)") <= seen:
-        if time.time() > deadline or not lab.running():
-            raise RuntimeError(f"{lab.container} did not restart:\n{lab.logs(20)}")
-        time.sleep(0.5)
-    for _ in range(5):
-        if lab.lua("game.tick_paused = true rcon.print(tostring(game.tick_paused))").strip() == "true":
-            return
-    raise RuntimeError(f"{lab.container} would not pause after the restart")
+    """Load the lab's original save in place, so the world is exactly as at first load."""
+    lab.reload(SAVE)
 
 
 def run_until_stopped(lab, wall_limit=900):

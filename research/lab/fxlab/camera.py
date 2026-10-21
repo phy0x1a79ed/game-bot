@@ -1,8 +1,8 @@
-"""Render client for labs: a full-game client under Xvfb that joins a lab over a private network and takes screenshots.
+"""Render camera for labs: a seat of role camera, a full-game client that takes screenshots for the lab.
 
-The camera player sits in a hidden booth surface with no character, so it changes nothing the lab simulates
-once the save already holds it (see `seed`). A first join into an unseeded save spawns a character and
-shifts unit numbers. The camera container is not a lab server, so the lease does not count it.
+The realm service starts the camera, parks its player in the lab mod's hidden booth with no character, and
+writes its screenshots to the seat's output directory. Parked, it changes nothing the lab simulates once the save
+already holds it (see `seed`). A first join into an unseeded save spawns a character and shifts unit numbers.
 """
 
 import itertools
@@ -12,131 +12,69 @@ import shutil
 import struct
 import subprocess
 import time
-from pathlib import Path
 
-from .lab import IMAGE, SHARED, Lab, SbxError, docker
+from .lab import SERVICE_DIR, SHARED, Lab, service
 
 PLAYER = "fxcam"
-GAME_PORT = 34197
-CONFIG = Path(__file__).resolve().parent / "cam" / "config-cam.ini"
-CACHE = SHARED / "rc" / "cam-cache"
+CACHE = SERVICE_DIR / "output" / "camera-cache"
 PX_PER_TILE = 32
 MAX_SIDE = 4096
-CLIENT_GONE = ("WaitingForUserToSaveOrQuitAfterServerLeft", "Quitting multiplayer connection")
-JOINS = {}  # lab container -> seconds the last attach took to reach InGame
+JOINS = {}  # lab world -> seconds the last attach took to reach InGame
 DESYNC_MARKS = ("desync", "multiplayermanager failed", "received unexpected", "dropped", "crc mismatch",
                 "keep up with the server")
 SHOTS = itertools.count(1)
 
 
+def seat(lab):
+    """The lab's live camera seat as the service lists it, or None."""
+    seats = service("seats", session_id=lab.sid).get("seats", [])
+    return next((s for s in seats if s.get("role") == "camera" and s.get("status") not in ("stopped", "error")), None)
+
+
 def container(lab):
-    return lab.container + "-cam"
+    s = seat(lab)
+    return s["container_name"] if s else None
 
 
-def network(lab):
-    return lab.container + "-net"
+def output(lab):
+    """The host directory the camera writes its screenshots to."""
+    s = seat(lab)
+    if s is None:
+        raise RuntimeError("lab has no camera; start it with camera=True")
+    return SERVICE_DIR / "output" / "seats" / s["seat_id"]
 
 
-def _logs(name, n=400):
-    res = subprocess.run(["docker", "logs", "--tail", str(n), name], capture_output=True, text=True)
-    return res.stdout + res.stderr
-
-
-def _running(name):
-    return docker("inspect", "-f", "{{.State.Running}}", name, check=False).strip() == "true"
-
-
-def _marker(lab):
-    return lab.dir / "camera.marker"
-
-
-def _lab_id(lab):
-    return docker("inspect", "-f", "{{.Id}}", lab.container, check=False).strip()
-
-
-def _cache_mounts():
-    """Sprite caches mount read-only, so two cameras never race on a write. Mesa's shader cache is multi-process safe."""
-    CACHE.mkdir(parents=True, exist_ok=True)
-    (CACHE / "mesa_shader_cache").mkdir(exist_ok=True)
-    mounts = ["-v", f"{CACHE / 'mesa_shader_cache'}:/root/.cache/mesa_shader_cache"]
-    for name in ("atlas-cache.dat", "crop-cache.dat"):
-        if (CACHE / name).exists():
-            mounts += ["-v", f"{CACHE / name}:/opt/factorio/{name}:ro"]
-    return mounts
-
-
-def attach(lab, timeout=300):
-    """Start the camera for `lab`, wait for it to join, then park its player in the booth.
-
-    Never `docker restart` the camera: after a server restart the client hangs and seat.sh leaves a stale
-    X lock. Remove the container and attach again.
-    """
-    cam, net = container(lab), network(lab)
-    docker("rm", "-f", cam, check=False)
-    _marker(lab).unlink(missing_ok=True)
-    docker("network", "create", "--label", "fxlab=1", net, check=False)
-    try:
-        docker("network", "connect", net, lab.container, check=False)
-        # the camera needs the lab's mods and its script-output (the client writes the PNGs), not its saves
-        mods = [m for m in lab.mounts()[1::2]
-                if m.split(":")[1].startswith(("/opt/factorio/mods", "/opt/factorio/script-output"))]
-        t0 = time.time()
-        docker("run", "-d", "--name", cam, "--label", "fxlab=1", "--label", "fxlab.role=camera",
-               "--network", net, "--cpus", "2", "--memory", "4g",
-               "-e", "FACTORIO_ROLE=seat", "-e", f"SEAT_NAME={PLAYER}", "-e", f"FACTORIO_HOST={lab.container}",
-               "-e", f"FACTORIO_PORT={GAME_PORT}", "-e", "SEAT_UNMAP=1",
-               *[x for m in mods for x in ("-v", m)],
-               "-v", f"{CONFIG}:/opt/factorio/config/config.ini:ro", *_cache_mounts(), IMAGE)
-        while "to(InGame)" not in _logs(cam):
-            if time.time() - t0 > timeout or not _running(cam):
-                raise RuntimeError(f"camera did not reach InGame:\n{_logs(cam, 40)}")
-            time.sleep(0.25)
-        JOINS[lab.container] = round(time.time() - t0, 1)
-        _park(lab, deadline=t0 + timeout)
-    except BaseException:
-        detach(lab, missing_ok=True)
-        raise
-    _marker(lab).write_text(_lab_id(lab))
-    return JOINS[lab.container]
-
-
-def _park(lab, deadline):
-    """view_booth, retried while the server has not yet created the joined player."""
-    while True:
-        try:
-            return lab.sbx("view_booth", player=PLAYER)
-        except SbxError as exc:
-            if exc.code != "not_found" or time.time() > deadline:
-                raise
-            time.sleep(0.5)
+def attach(lab):
+    """Join the camera seat and wait until it is parked in the booth. Returns the seconds the join took."""
+    t0 = time.time()
+    service("join", timeout=400, session_id=lab.sid, role="camera")
+    JOINS[lab.world] = round(time.time() - t0, 1)
+    return JOINS[lab.world]
 
 
 def detach(lab, missing_ok=False):
-    """Remove the camera container and its network."""
-    cam, net = container(lab), network(lab)
-    if not missing_ok and not docker("ps", "-aq", "--filter", f"name=^{cam}$").strip():
-        raise RuntimeError(f"{cam}: no camera attached")
-    docker("rm", "-f", cam, check=False)
-    docker("network", "disconnect", "-f", net, lab.container, check=False)
-    docker("network", "rm", net, check=False)
-    _marker(lab).unlink(missing_ok=True)
+    """Leave the camera seat."""
+    s = seat(lab)
+    if s is None:
+        if not missing_ok:
+            raise RuntimeError(f"{lab.world}: no camera attached")
+        return
+    service("leave", seat_id=s["seat_id"])
 
 
 def ensure(lab):
-    """Recreate the camera when its container is gone or its client left the game, if this lab ever had one."""
-    cam = container(lab)
-    if _running(cam) and not any(mark in _logs(cam, 60) for mark in CLIENT_GONE):
-        return
-    marker = _marker(lab)
-    if not marker.exists() or marker.read_text() != _lab_id(lab):
+    """Rejoin the camera when its client left the game. Raises when the lab never had one."""
+    s = seat(lab)
+    if s is None:
         raise RuntimeError("lab has no camera; start it with camera=True")
-    attach(lab)
+    if not (s.get("container_running") and s.get("connected")):
+        service("rejoin", timeout=3700, seat_id=s["seat_id"])
 
 
 def desyncs(lab):
     """Log lines of the camera client and the server that name a desync or a drop of the camera."""
     seen = []
-    for name in (container(lab), lab.container):
+    for name in filter(None, (container(lab), lab.container)):
         res = subprocess.run(["docker", "logs", name], capture_output=True, text=True)
         for line in (res.stdout + res.stderr).splitlines():
             if any(mark in line.lower() for mark in DESYNC_MARKS):
@@ -180,7 +118,7 @@ def frame(area, zoom=1):
 
 
 def render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None, timeout=120):
-    """Take a screenshot with the camera and return the PNG path under lab.output once the file stops growing.
+    """Take a screenshot with the camera and return the PNG path in the camera's output once the file stops growing.
 
     Give `area` as ((x0, y0), (x1, y1)) to fill the frame with it, or `position` and optionally `resolution`.
     """
@@ -190,11 +128,9 @@ def render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, 
         raise ValueError("render needs area or position")
     ensure(lab)
     path = f"fxlab/shot-{lab.tick()}-{_nonce()}.png"
-    # the lab server writes script-output as root, so only it can delete a leftover
-    docker("exec", lab.container, "rm", "-f", f"/opt/factorio/script-output/{path}")
     r = lab.sbx("view_shot", surface=surface, position=list(position), zoom=zoom, info=bool(info),
                 resolution=list(resolution or (1280, 720)), path=path)
-    return _wait_png(lab.output / r["path"], timeout)
+    return _wait_png(output(lab) / r["path"], timeout)
 
 
 def seed(save):

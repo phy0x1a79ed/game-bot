@@ -93,6 +93,9 @@ def main(argv=None):
         print(f"{'PASS' if r['ok'] else 'FAIL'} {name} ({r['wall_s']}s) {r['detail']}")
     best_path = RATCHET / "best.json"
     best = json.loads(best_path.read_text()) if best_path.exists() else None
+    if best:
+        # a fixture deleted from the suite stops counting against every later run
+        best["results"] = {n: r for n, r in best["results"].items() if n in FIXTURES}
     accepted, reasons = compare(run, best)
     if accepted and not a.no_advance:
         merged = dict(best["results"]) if best else {}

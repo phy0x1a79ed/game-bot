@@ -86,7 +86,7 @@ def case(tool_names, surface="nauvis", build=None):
         def run(lab):
             old = sync(lab, *tool_names)
             if old:
-                return Result(False, f"game-bot-control {old} has no tool registry; set FXLAB_GBC_MOD")
+                return Result(False, f"game-bot-control {old} has no tool registry")
             if build:
                 build(lab)
             before, bad, data = stamp(lab, surface), [], {}

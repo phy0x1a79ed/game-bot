@@ -1,17 +1,16 @@
-"""Fixtures for the render camera: a real shot, a hidden-surface shot, its lifecycle rules, and the determinism check behind F8."""
+"""Fixtures for the render camera: a real shot, a hidden-surface shot, its rules, and the determinism check behind F8."""
 
 import json
-import struct
 import subprocess
 import threading
 import time
-import zlib
+from pathlib import Path
 
 from .. import camera
 from ..lab import SHARED
 from .registry import Result, fixture
 
-CAM_DIR = camera.CONFIG.parent
+CAM_DIR = Path(__file__).resolve().parents[1] / "cam"
 MODULE_AREA = ((111, -40), (153, -14))
 SEEDED_FROM = "run4-closeout"
 TARGET_STEP = 7200
@@ -26,7 +25,7 @@ def cam_shot(lab):
     shot_s = round(time.time() - t0, 2)
     want, got = camera.frame(MODULE_AREA)[1], camera.png_size(path)
     size = path.stat().st_size
-    data = {"join_s": camera.JOINS.get(lab.container), "shot_s": shot_s, "bytes": size, "px": got}
+    data = {"join_s": camera.JOINS.get(lab.world), "shot_s": shot_s, "bytes": size, "px": got}
     ok = size > 50_000 and got == want
     return Result(ok, f"{path.name} {got} (want {want}) {size // 1000} kB in {shot_s}s", data=data)
 
@@ -59,79 +58,18 @@ def cam_render_needs_camera(lab):
         err = str(exc)
     else:
         return Result(False, "render returned without a camera")
-    started = camera.container(lab) in running_names()
+    started = camera.seat(lab) is not None
     return Result("lab has no camera; start it with camera=True" in err and not started, f"{err!r} started={started}")
-
-
-def _leftovers(lab):
-    cam, net = camera.container(lab), camera.network(lab)
-    names = subprocess.run(["docker", "ps", "-a", "--format", "{{.Names}}"], capture_output=True, text=True).stdout.split()
-    nets = subprocess.run(["docker", "network", "ls", "--format", "{{.Name}}"], capture_output=True, text=True).stdout.split()
-    return [n for n in (cam, net) if n in names + nets] + (["marker"] if camera._marker(lab).exists() else [])
-
-
-@fixture(source="create", tags={"cam"})
-def cam_attach_cleans_up(lab):
-    """A failed attach leaves no network, container or marker: a failing docker run, and a client that never joins."""
-    real = camera.docker
-
-    def failing_run(*args, **kw):
-        if args[0] == "run":
-            raise RuntimeError("docker run: injected failure")
-        return real(*args, **kw)
-
-    camera.docker = failing_run
-    try:
-        try:
-            camera.attach(lab)
-        except RuntimeError as exc:
-            run_err = str(exc)
-        else:
-            return Result(False, "attach survived a failing docker run")
-    finally:
-        camera.docker = real
-    after_run = _leftovers(lab)
-    try:
-        camera.attach(lab, timeout=3)
-    except RuntimeError as exc:
-        join_err = str(exc)
-    else:
-        return Result(False, "attach reached InGame in 3 s")
-    after_join = _leftovers(lab)
-    ok = "injected" in run_err and "did not reach InGame" in join_err and not after_run and not after_join
-    return Result(ok, f"leftovers after failed run {after_run}, after failed join {after_join}")
-
-
-def _blank_png(w, h):
-    def chunk(kind, body):
-        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
-
-    rows = (b"\x00" + b"\x00\x00\x00" * w) * h
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
-            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
 @fixture(source="create", tags={"cam"}, camera=True)
 def cam_no_stale_shot(lab):
-    """A PNG already at the shot's path is never returned, and two shots never share a path."""
-    decoy = _blank_png(320, 180)
-    stale = lab.output / "fxlab/shot-111-decoy.png"
-    seed_file = lab.dir / "decoy.png"
-    seed_file.write_bytes(decoy)
-    subprocess.run(["docker", "exec", lab.container, "mkdir", "-p", "/opt/factorio/script-output/fxlab"], check=True)
-    subprocess.run(["docker", "cp", str(seed_file), f"{lab.container}:/opt/factorio/script-output/fxlab/shot-111-decoy.png"],
-                   check=True)
-    assert stale.read_bytes() == decoy
-    real, camera._nonce, lab.tick = camera._nonce, lambda: "decoy", lambda: 111
-    try:
-        path = camera.render(lab, position=(0, 0), resolution=(320, 180))
-    finally:
-        camera._nonce = real
-        del lab.tick
-    fresh = path == stale and path.read_bytes() != decoy and camera.png_size(path) == (320, 180)
+    """Each shot is a new file written after the call began, and two shots never share a path."""
+    t0 = time.time()
     a = camera.render(lab, position=(0, 0), resolution=(320, 180))
     b = camera.render(lab, position=(0, 0), resolution=(320, 180))
-    return Result(fresh and a != b, f"decoy replaced={fresh}, paths differ={a != b}")
+    fresh = all(p.stat().st_mtime >= t0 - 1 and camera.png_size(p) == (320, 180) for p in (a, b))
+    return Result(fresh and a != b, f"fresh={fresh}, paths differ={a != b}")
 
 
 @fixture(source="create", tags={"cam"}, camera=True)
@@ -144,7 +82,7 @@ def cam_cache_readonly(lab):
     stats = {n: (camera.CACHE / n).stat() for n in ("atlas-cache.dat", "crop-cache.dat")}
     ro = all(rw.get(f"/opt/factorio/{n}") == "false" for n in stats)
     return Result(ro, f"mounts {rw}, join {camera.JOINS.get(lab.container)}s",
-                  data={"join_s": camera.JOINS.get(lab.container), "atlas_bytes": stats["atlas-cache.dat"].st_size})
+                  data={"join_s": camera.JOINS.get(lab.world), "atlas_bytes": stats["atlas-cache.dat"].st_size})
 
 
 def fingerprint(lab):
@@ -154,7 +92,7 @@ def fingerprint(lab):
     cpu, done = {}, threading.Event()
 
     def watch():
-        names = [lab.container] + ([camera.container(lab)] if camera.container(lab) in running_names() else [])
+        names = [lab.container] + [n for n in [camera.container(lab)] if n in running_names()]
         while not done.is_set():
             for name in names:
                 out = subprocess.run(["docker", "stats", "--no-stream", "--format", "{{.CPUPerc}}", name],
@@ -180,7 +118,7 @@ def fingerprint(lab):
     fp = json.loads(lab.lua((CAM_DIR / "fpall.lua").read_text()))
     fine = json.loads(lab.lua((CAM_DIR / "fpfine.lua").read_text()))
     fp.update({"fine_" + k: v for k, v in fine.items()})
-    return {"target": target, "fp": fp, "ups": round((fp["tick"] - start) / wall),
+    return {"target": target, "fp": fp, "ups": round((fp["tick"] - start) / wall), "server": lab.container,
             "cpu": {n: round(sum(v) / len(v)) for n, v in cpu.items()}}
 
 
@@ -201,7 +139,7 @@ def cam_fidelity(lab):
         try:
             arms[arm] = fingerprint(lab)
             if with_camera:
-                arms[arm]["camera_running"] = camera._running(camera.container(lab))
+                arms[arm]["camera_running"] = camera.container(lab) in running_names()
                 arms[arm]["camera_connected"] = lab.lua(
                     f'local p = game.players["{camera.PLAYER}"] rcon.print(tostring(p ~= nil and p.connected))').strip() == "true"
                 arms[arm]["desyncs"] = camera.desyncs(lab)
@@ -214,7 +152,7 @@ def cam_fidelity(lab):
           and b_arm["camera_connected"] and not b_arm["desyncs"])
     data = {"cpu": {"A": arms["A"]["cpu"], "B": arms["B"]["cpu"]}, "ups": {"A": arms["A"]["ups"], "B": arms["B"]["ups"]},
             "tick": a["tick"], "diff": diff, "camera_connected": b_arm["camera_connected"], "desyncs": b_arm["desyncs"]}
-    cam_cpu = next((v for k, v in arms["B"]["cpu"].items() if k.endswith("-cam")), None)
+    cam_cpu = next((v for k, v in arms["B"]["cpu"].items() if k != arms["B"]["server"]), None)
     note = "" if b_arm["camera_connected"] else "; camera NOT connected at the end"
     note += f"; desync lines: {b_arm['desyncs'][:3]}" if b_arm["desyncs"] else ""
     return Result(ok, f"tick {a['tick']}, " + (f"differs: {diff}" if diff else "identical") +

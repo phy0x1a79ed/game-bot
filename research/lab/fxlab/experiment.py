@@ -12,7 +12,6 @@ trains amplify any perturbation. `--noise N` measures a scenario's floor before 
 
 import argparse
 import json
-import re
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -63,19 +62,8 @@ ARMS = {
   ./fx waits [-n N] [--area X0 Y0 X1 Y1]
         what the factory waits for, per item, largest first: machines short of it, inserters waiting on
         it, belts empty at the consumer, ghosts the robots cannot cover. Also output-blocked machines.
-  ./fx act <verb> key=value ...  one checked action; JSON values are parsed (e.g. items='["coal"]')
-        look x0= y0= x1= y1= [limit=] [count=true]   entities in an area with recipe and status
-        resources x0= y0= x1= y1=        ore patches: tiles, amount, extent, drills on each
-        network x= y=                    the robot network whose robots build at a point: robots, storage contents
-        rate items='["iron-plate"]'      made and used per minute, last 1 and 10 minutes
-        ghost name= x= y= [direction=north|east|south|west] [recipe=]   place one ghost
-        ghosts list='[["transport-belt",1.5,2.5,"south"],["assembling-machine-2",5.5,2.5,"north","iron-gear-wheel"]]'
-                                         place many ghosts in one call: [name, x, y, direction, recipe]
-        blueprint bp= x= y= [direction=]  place a blueprint string as ghosts
-        remove name= x= y=               mark the one entity of that name on that tile for deconstruction
-        cancel name= x= y=               unmark it
-        recipe x= y= recipe=             set an assembler's recipe
-        research tech=                   queue a technology
+  ./fx tools                     the library tools: name, summary and args
+  ./fx tool <name> key=value ... run one library tool; JSON values are parsed (e.g. items='["coal"]')
 """,
 }
 
@@ -97,8 +85,8 @@ case "$cmd" in
     echo $((used + n)) > "$state"
     echo "advanced $n ticks; $(((cap - used - n) / 3600)) game minutes left" ;;
   lua) [ "$arm" = raw ] || {{ echo "no such command"; exit 2; }}; exec "$fxlab" lua "$lab" "$@" ;;
-  act|waits) [ "$arm" = tools ] || {{ echo "no such command"; exit 2; }}; exec "$fxlab" "$cmd" "$lab" "$@" ;;
-  *) echo "commands: time, advance$( [ "$arm" = raw ] && echo ", lua" || echo ", act, waits")"; exit 2 ;;
+  tool|tools|waits) [ "$arm" = tools ] || {{ echo "no such command"; exit 2; }}; exec "$fxlab" "$cmd" "$lab" "$@" ;;
+  *) echo "commands: time, advance$( [ "$arm" = raw ] && echo ", lua" || echo ", tools, tool, waits")"; exit 2 ;;
 esac
 """
 
@@ -131,6 +119,9 @@ def run_arm(arm, out, save, item, budget_min, window_min, model, max_turns, scen
            "clock": "paused except under fx advance"}
     try:
         start(lab, save, scenario)
+        if arm == "tools":
+            from . import tools
+            tools.sync(lab)
         before = balance.snapshot(lab)
         tick0 = lab.tick()
         t0 = time.time()
@@ -172,14 +163,17 @@ def run_baseline(out, save, item, ticks, window_min, scenario="calm"):
         lab.down()
 
 
+NUDGE = """local s = game.surfaces.nauvis
+local r = s.find_entities_filtered{type = "roboport", force = "player"}
+local e = r[%d %% #r + 1]
+local at = e and s.find_non_colliding_position("iron-chest", e.position, 10, 1, true)
+local g = at and s.create_entity{name = "entity-ghost", inner_name = "iron-chest", position = at, force = "player"}
+rcon.print(tostring(g ~= nil))"""
+
+
 def nudge(lab, i):
     """The smallest real change: one iron-chest ghost beside the i-th roboport, for robots to build."""
-    from . import acts
-    xy = lab.lua('local r = game.surfaces.nauvis.find_entities_filtered{type = "roboport", force = "player"} '
-                 f'local e = r[{i} % #r + 1] rcon.print(e.position.x .. " " .. e.position.y)').split()
-    hint = acts.act(lab, "ghost", name="iron-chest", x=float(xy[0]), y=float(xy[1])).get("refused", "")
-    m = re.search(r"fits is \((-?[\d.]+), (-?[\d.]+)\)", hint)
-    return bool(m) and acts.act(lab, "ghost", name="iron-chest", x=float(m[1]), y=float(m[2]))["ok"]
+    return lab.lua(NUDGE % i).strip() == "true"
 
 
 def noise(save, item, window_min, n, scenario, ticks=8400):
