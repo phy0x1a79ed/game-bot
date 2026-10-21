@@ -1,8 +1,9 @@
 -- One scripted gun-turret creep against a nest, run by the fidelity fixture on a slice or on nauvis.
 -- Input: global FID = {box, surface, force, nest = {x, y, r}, clear_radius, ammo, load, n, stage, standoff, stages,
 -- from = {x, y}, t0, cap}. Run it after stop.lua, which owns the tick handler; its state lives in the global `fid`.
+-- Ammo is free: the creep inserts it straight into each turret.
 -- Every `stage` ticks a group of `n` turrets lands `standoff` tiles short of the nearest live spawner or worm, on the line
--- from the last group, and every live turret is topped up to `load` magazines through the god `items` verb.
+-- from the last group, and every live turret is topped up to `load` magazines.
 -- Once `fid.arm()` has started the creep, the game pauses when the nest is clear or `cap` ticks have passed.
 -- `fid.report()` reads the outcome.
 
@@ -28,13 +29,11 @@ local function mine()
   return surf().find_entities_filtered{force = P.force, name = "gun-turret", position = nest, radius = nest.r + 40}
 end
 
+-- the god `items` verb finds an entity by unit number, which game.get_entity_by_unit_number never returns for a building
 local function top_up(turret)
-  local have = turret.get_inventory(defines.inventory.turret_ammo).get_item_count(P.ammo)
-  if have >= P.load then return end
-  local reply = remote.call("sbx", "items", {name = P.box, target = "entity", entity = turret.unit_number,
-                                              items = {{name = P.ammo, count = P.load - have}}})
-  if not reply.ok then error("items: " .. tostring(reply.error) .. " " .. tostring(reply.detail)) end
-  fid.given = fid.given + (reply.inserted[P.ammo] or 0)
+  local ammo = turret.get_inventory(defines.inventory.turret_ammo)
+  local have = ammo.get_item_count(P.ammo)
+  if have < P.load then fid.given = fid.given + ammo.insert{name = P.ammo, count = P.load - have} end
 end
 
 local function place_group(target)

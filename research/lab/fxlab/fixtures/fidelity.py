@@ -14,7 +14,7 @@ from pathlib import Path
 from .. import lab as labmod
 from ..lab import SbxError
 from .registry import Result, fixture
-from .slice import RED_GREEN, timed
+from .slice import timed
 
 FIDELITY = Path(__file__).resolve().parents[2] / "fidelity"
 SAVE = "run4-closeout"
@@ -24,7 +24,6 @@ RATE_FLOOR = 0.01
 STOCK_FLOOR = 1.0
 CEILING_SLACK = 1.005
 SATURATED = 0.98
-SAMPLE_EVERY = 600
 LAB = {"cpus": 3, "memory": "6g"}
 MARGIN = 32
 F5_CAP_MINUTES = 15
@@ -57,11 +56,11 @@ def sized(lab):
 def restart(lab):
     """Kill the lab's server and start it again on its original save, so the world is exactly as at first load."""
     lab.close()
-    seen = lab.logs(5000).count("to(InGame)")
+    seen = lab.logs(200000).count("to(InGame)")
     labmod.docker("kill", lab.container)
     labmod.docker("start", lab.container)
     deadline = time.time() + 180
-    while lab.logs(5000).count("to(InGame)") <= seen:
+    while lab.logs(200000).count("to(InGame)") <= seen:
         if time.time() > deadline or not lab.running():
             raise RuntimeError(f"{lab.container} did not restart:\n{lab.logs(20)}")
         time.sleep(0.5)
@@ -158,25 +157,32 @@ def misses(table, items=None):
 
 
 class Arms:
-    """A slice and an in-place cut of one rectangle, made in the same tick. Dropping them restores nauvis."""
+    """A slice and a second arm of one rectangle, made from the same tick. Dropping them restores nauvis.
 
-    def __init__(self, lab, area, tag="", inplace=True, offset=1):
-        self.lab, self.area, self.offset = lab, area, offset
+    `other` is "inplace" for the in-place cut on nauvis, "later" for a second slice built one tick after the first
+    (a control: the same arm, started one tick apart), or None for the slice alone.
+    """
+
+    def __init__(self, lab, area, tag="", other="inplace", offset=1):
+        self.lab, self.area, self.offset, self.other = lab, area, offset, other
         self.names = {"slice": f"fs{tag}"}
-        if inplace:
+        if other:
             self.names["inplace"] = f"fp{tag}"
         self.reply = {}
         self.queries = {}
 
     def __enter__(self):
         align(self.lab, self.offset)
-        built = timed(self.lab, "slice_build", name=self.names["slice"], area=self.area)
-        self.reply["slice"] = built
+        self.reply["slice"] = timed(self.lab, "slice_build", name=self.names["slice"], area=self.area)
         self.queries["slice"] = (f"sbx-{self.names['slice']}", self.area)
-        if "inplace" in self.names:
-            cut = timed(self.lab, "slice_inplace", name=self.names["inplace"], area=self.area)
-            self.reply["inplace"] = cut
+        if self.other == "inplace":
+            self.reply["inplace"] = timed(self.lab, "slice_inplace", name=self.names["inplace"], area=self.area)
             self.queries["inplace"] = ("nauvis", self.area)
+        elif self.other == "later":
+            self.lab.lua(f"fid.stop = {self.lab.tick() + 1}")
+            run_until_stopped(self.lab)
+            self.reply["inplace"] = timed(self.lab, "slice_build", name=self.names["inplace"], area=self.area)
+            self.queries["inplace"] = (f"sbx-{self.names['inplace']}", self.area)
         return self
 
     def __exit__(self, *exc):
@@ -194,25 +200,38 @@ class Arms:
     def unhandled(self):
         return {arm: u for arm, r in self.reply.items() if (u := listing(r["unhandled"]))}
 
+    def supply(self, arm):
+        """The surface and force whose electric network the arm's rectangle sits in."""
+        if arm == "inplace" and self.other == "inplace":
+            return "nauvis", "player"
+        return self.queries[arm][0], f"sbx-{self.names[arm]}"
+
 
 def power(lab, surface, force, area, remove=False):
     """One energy interface per electric network inside `area`; with `remove`, take away what an earlier call made."""
-    code = f'ARGS = helpers.json_to_table([==[{json.dumps([surface, force, area, remove])}]==])\n' + (FIDELITY / "power.lua").read_text()
-    return json.loads(lab.lua(code))
+    code = f'ARGS = helpers.json_to_table([==[{json.dumps([surface, force, area, remove])}]==])\n'
+    return json.loads(lab.lua(code + (FIDELITY / "power.lua").read_text()))
 
 
-def window(lab, queries, warmup=WARMUP, ticks=WINDOW, every=None):
-    """Advance a warm-up, then read the window's start and end (and every `every` ticks between)."""
+def window(lab, queries, warmup=WARMUP, ticks=WINDOW):
+    """Advance a warm-up, then read the window's start and end."""
     lab.advance(warmup)
-    reads = [read(lab, queries)]
-    if every:
-        for _ in range(ticks // every):
-            lab.advance(every)
-            reads.append(read(lab, queries))
-    else:
-        lab.advance(ticks)
-        reads.append(read(lab, queries))
-    return reads
+    first = read(lab, queries)
+    lab.advance(ticks)
+    return first, read(lab, queries)
+
+
+def sample_machines(lab, queries):
+    """Start counting working machines every 61 ticks inside the rectangles (fidelity/sampler.lua)."""
+    if lab.lua("rcon.print(tostring(fid and fid.sample_start ~= nil))").strip() != "true":
+        lab.lua((FIDELITY / "sampler.lua").read_text())
+    args = [[key, surface, area] for key, (surface, area) in queries.items()]
+    lab.lua(f"fid.sample_start(helpers.json_to_table([==[{json.dumps(args)}]==]))")
+
+
+def sampled(lab):
+    """Stop counting. Returns {key: {recipe: {n, working}}}."""
+    return json.loads(lab.lua("rcon.print(helpers.table_to_json(fid.sample_stop()))"))
 
 
 def round_all(x, digits=4):
@@ -254,14 +273,13 @@ def fid_f1(lab):
     return Result(True, f"{len(data)} modules, worst product error {worst:.4f}", data=data)
 
 
-def utilisation(samples):
-    """Per item, the share of machine-samples with status working over every sample of the window."""
+def utilisation(counts, snapshot):
+    """Per item, the share of machine-samples with status working over every recipe that makes it."""
     seen = {}
-    for snap in samples:
-        for recipe in snap["recipes"].values():
-            for item in recipe["products"]:
-                n, w = seen.get(item, (0, 0))
-                seen[item] = (n + recipe["n"], w + recipe["working"])
+    for recipe, c in counts.items():
+        for item in snapshot["recipes"][recipe]["products"]:
+            n, w = seen.get(item, (0, 0))
+            seen[item] = (n + c["n"], w + c["working"])
     return {item: w / n for item, (n, w) in seen.items() if n}
 
 
@@ -271,14 +289,19 @@ def fid_f2(lab):
     lab = sized(lab)
     data, bad = {}, []
     for module in corpus():
-        with Arms(lab, module["area"], inplace=False) as arms:
+        with Arms(lab, module["area"], other=None) as arms:
             entry = data[module["id"]] = {"arms": arms.summary()}
             if arms.unhandled():
                 bad.append(f"{module['id']}: unhandled ports {arms.unhandled()}")
                 continue
-            samples = [s["slice"] for s in window(lab, arms.queries, every=SAMPLE_EVERY)]
-        x = rates(samples[0], samples[-1])
-        busy = utilisation(samples)
+            lab.advance(WARMUP)
+            first = read(lab, arms.queries)
+            sample_machines(lab, arms.queries)
+            lab.advance(WINDOW)
+            last = read(lab, arms.queries)
+            counts = sampled(lab)["slice"]
+        x = rates(first["slice"], last["slice"])
+        busy = utilisation(counts, last["slice"])
         items = {}
         for item, rate in x["produced"].items():
             ceiling = x["ceiling"][item]
@@ -289,7 +312,8 @@ def fid_f2(lab):
             if busy.get(item, 0.0) >= SATURATED and relative(rate, ceiling) > TOLERANCE:
                 bad.append(f"{module['id']}: {item} {rate:.2f}/min is saturated ({busy[item]:.3f}) "
                            f"but {relative(rate, ceiling):.3f} off its ceiling {ceiling:.2f}")
-        entry.update(minutes=x["minutes"], samples=len(samples), items=items, recipes=x["recipes"])
+        entry.update(minutes=x["minutes"], items=items, recipes=x["recipes"],
+                     machine_samples=sum(c["n"] for c in counts.values()))
     data = round_all(data)
     if bad:
         return Result(False, "; ".join(bad), data=data)
@@ -303,7 +327,7 @@ def fid_f4(lab):
     module = next(m for m in corpus() if m["id"] == "redgreen")
     area = module["area"]
     runs, bad = {}, []
-    with Arms(lab, area, inplace=False) as arms:
+    with Arms(lab, area, other=None) as arms:
         if arms.unhandled():
             return Result(False, f"unhandled ports {arms.unhandled()}")
         name = arms.names["slice"]
@@ -338,7 +362,7 @@ def fid_f5(lab):
     module = next(m for m in corpus() if m["id"] == "redgreen")
     area = module["area"]
     padded = [[area[0][0] - MARGIN, area[0][1] - MARGIN], [area[1][0] + MARGIN, area[1][1] + MARGIN]]
-    with Arms(lab, padded, tag="m", inplace=False) as arms:
+    with Arms(lab, padded, tag="m", other=None) as arms:
         queries = {"slice": (arms.queries["slice"][0], area), "base": ("nauvis", area)}
         build = arms.summary()["slice"]
         previous = read(lab, queries)
@@ -366,23 +390,20 @@ def fid_f5(lab):
                   score=float(score), data=data)
 
 
-@fixture(source=SAVE, tags={"fidelity", "slow"})
-def fid_f9b(lab):
-    """F9b: after both arms switch to standard in one tick, the slice and the in-place cut drain alike."""
-    lab = sized(lab)
-    module = next(m for m in corpus() if m["id"] == "redgreen")
-    bad = []
-    with Arms(lab, module["area"]) as arms:
+def drain_run(lab, module, other):
+    """Warm up in god mode, switch both arms to standard in one tick, give both the same power, and run 5 minutes.
+
+    Returns the two arms' rates, their reads and the ledger sizes, or None when a port stayed unhandled.
+    """
+    with Arms(lab, module["area"], other=other) as arms:
         if arms.unhandled():
-            return Result(False, f"unhandled ports {arms.unhandled()}")
+            return {"unhandled": arms.unhandled()}
         lab.advance(WARMUP)
-        before = {a: lab.sbx("ledger", name=n)["count"] for a, n in arms.names.items()}
+        ledger = {a: lab.sbx("ledger", name=n)["count"] for a, n in arms.names.items()}
         for name in arms.names.values():
             lab.sbx("sbx_mode", name=name, mode="standard", research="keep")
         # standard mode takes the closers' power too, and an unpowered module drains nothing: give both the same supply
-        powered = {arm: power(lab, surface, force, arms.area)
-                   for arm, (surface, force) in (("slice", (arms.queries["slice"][0], f"sbx-{arms.names['slice']}")),
-                                                 ("inplace", ("nauvis", "player")))}
+        powered = {arm: power(lab, *arms.supply(arm), arms.area) for arm in arms.names}
         try:
             switched = read(lab, arms.queries)
             lab.advance(18000)
@@ -390,16 +411,41 @@ def fid_f9b(lab):
         finally:
             power(lab, "nauvis", "player", arms.area, remove=True)
     mine, base = rates(switched["slice"], ended["slice"]), rates(switched["inplace"], ended["inplace"])
-    nets = compare(mine, base, set(mine["produced"]) | set(base["produced"]), key="produced")
-    drains = compare(mine, base, set(mine["stock"]) | set(base["stock"]), key="stock")
-    bad += [f"rate {i}: {c['slice']} vs {c['inplace']}" for i, c in nets.items() if c["error"] > TOLERANCE]
-    bad += [f"drain {i}: {c['slice']} vs {c['inplace']}" for i, c in drains.items() if c["error"] > TOLERANCE]
-    data = round_all({"ledger_entries": before, "powered_networks": powered, "minutes": mine["minutes"],
-                      "produced": nets, "drain": drains,
-                      "net": compare(mine, base, set(mine["net"]) | set(base["net"]))})
+    return {"slice": mine, "inplace": base, "ledger": ledger, "powered": powered}
+
+
+def drain_table(run):
+    """The produced rates and stock drains of the two arms, with their errors."""
+    mine, base = run["slice"], run["inplace"]
+    return {"minutes": mine["minutes"], "ledger_entries": run["ledger"], "powered_networks": run["powered"],
+            "produced": compare(mine, base, set(mine["produced"]) | set(base["produced"]), key="produced"),
+            "drain": compare(mine, base, set(mine["stock"]) | set(base["stock"]), key="stock"),
+            "net": compare(mine, base, set(mine["net"]) | set(base["net"]))}
+
+
+@fixture(source=SAVE, tags={"fidelity", "slow"})
+def fid_f9b(lab):
+    """F9b: after both arms switch to standard in one tick, the slice and the in-place cut drain alike.
+
+    A control repeats the run with a second slice in place of the in-place cut, started one tick later: the error
+    between two slices is the floor that a drain of this module can be reproduced to.
+    """
+    lab = sized(lab)
+    module = next(m for m in corpus() if m["id"] == "redgreen")
+    run = drain_run(lab, module, "inplace")
+    if "unhandled" in run:
+        return Result(False, f"unhandled ports {run['unhandled']}")
+    main = drain_table(run)
+    control = drain_table(drain_run(lab, module, "later"))
+    bad = [f"rate {i}: {c['slice']} vs {c['inplace']}" for i, c in main["produced"].items() if c["error"] > TOLERANCE]
+    bad += [f"drain {i}: {c['slice']} vs {c['inplace']}" for i, c in main["drain"].items() if c["error"] > TOLERANCE]
+    worst = {name: max(c["error"] for table in (t["produced"], t["drain"]) for c in table.values())
+             for name, t in (("arms", main), ("control", control))}
+    data = round_all({**main, "control": control, "worst_error": worst})
     if bad:
-        return Result(False, "; ".join(bad), data=data)
-    return Result(True, f"{len(nets)} rates and {len(drains)} stock drains agree", data=data)
+        return Result(False, f"{'; '.join(bad)} (control, two slices one tick apart: worst error {worst['control']:.3f})",
+                      data=data)
+    return Result(True, f"{len(main['produced'])} rates and {len(main['drain'])} stock drains agree", data=data)
 
 
 def combat_trial(lab, arm, seed):
@@ -441,14 +487,14 @@ def fid_f6(lab):
             trials[key].append(combat_trial(lab, arm, seed))
     summary, bad = {}, []
     for metric in ("cleared", "lost"):
-        cells = {key: [(t[metric] if t[metric] is not None else COMBAT_CAP) for t in runs] for key, runs in trials.items()}
+        cells = {key: [t.get(metric, COMBAT_CAP) for t in runs] for key, runs in trials.items()}
         low, high = min(cells["full"]), max(cells["full"])
         median = statistics.median(cells["slice"])
         summary[metric] = {"full": cells["full"], "slice": cells["slice"], "full_range": [low, high],
                            "slice_median": median, "inside": low <= median <= high}
         if not low <= median <= high:
             bad.append(f"slice median {metric} {median} outside the full world's {low}-{high}")
-    failed = [f"{key} seed {i + 1}: {t['err']}" for key, runs in trials.items() for i, t in enumerate(runs) if t["err"]]
+    failed = [f"{key} seed {i + 1}: {t.get('err')}" for key, runs in trials.items() for i, t in enumerate(runs) if t.get("err")]
     data = round_all({"summary": summary, "trials": trials})
     if failed or bad:
         return Result(False, "; ".join(failed + bad), data=data)
