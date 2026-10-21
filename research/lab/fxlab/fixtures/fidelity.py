@@ -28,6 +28,8 @@ LAB = {"cpus": 3, "memory": "6g"}
 MARGIN = 32
 F5_CAP_MINUTES = 15
 F4_OFFSETS = (3, 7)
+DRAIN_CAP_MINUTES = 30
+MADE_NOTHING = 0.01
 NEST = {"x": -52, "y": 331, "r": 70}
 COMBAT_AREA = [[-196, 187], [92, 475]]
 COMBAT_CAP = 18000
@@ -199,18 +201,6 @@ class Arms:
 
     def unhandled(self):
         return {arm: u for arm, r in self.reply.items() if (u := listing(r["unhandled"]))}
-
-    def supply(self, arm):
-        """The surface and force whose electric network the arm's rectangle sits in."""
-        if arm == "inplace" and self.other == "inplace":
-            return "nauvis", "player"
-        return self.queries[arm][0], f"sbx-{self.names[arm]}"
-
-
-def power(lab, surface, force, area, remove=False):
-    """One energy interface per electric network inside `area`; with `remove`, take away what an earlier call made."""
-    code = f'ARGS = helpers.json_to_table([==[{json.dumps([surface, force, area, remove])}]==])\n'
-    return json.loads(lab.lua(code + (FIDELITY / "power.lua").read_text()))
 
 
 def window(lab, queries, warmup=WARMUP, ticks=WINDOW):
@@ -391,61 +381,74 @@ def fid_f5(lab):
 
 
 def drain_run(lab, module, other):
-    """Warm up in god mode, switch both arms to standard in one tick, give both the same power, and run 5 minutes.
+    """Switch both arms to standard in the tick after the build and run them until the module stops.
 
-    Returns the two arms' rates, their reads and the ledger sizes, or None when a port stayed unhandled.
+    There is no god warm-up, so both arms start the drain from the same cloned stock.
+
+    The energy interfaces stay (power="keep"), so the module drains its stock instead of freezing. A minute with
+    no product on both arms ends the run, at most DRAIN_CAP_MINUTES after the switch.
     """
     with Arms(lab, module["area"], other=other) as arms:
         if arms.unhandled():
             return {"unhandled": arms.unhandled()}
-        lab.advance(WARMUP)
         ledger = {a: lab.sbx("ledger", name=n)["count"] for a, n in arms.names.items()}
         for name in arms.names.values():
-            lab.sbx("sbx_mode", name=name, mode="standard", research="keep")
-        # standard mode takes the closers' power too, and an unpowered module drains nothing: give both the same supply
-        powered = {arm: power(lab, *arms.supply(arm), arms.area) for arm in arms.names}
-        try:
-            switched = read(lab, arms.queries)
-            lab.advance(18000)
-            ended = read(lab, arms.queries)
-        finally:
-            power(lab, "nauvis", "player", arms.area, remove=True)
-    mine, base = rates(switched["slice"], ended["slice"]), rates(switched["inplace"], ended["inplace"])
-    return {"slice": mine, "inplace": base, "ledger": ledger, "powered": powered}
+            lab.sbx("sbx_mode", name=name, mode="standard", research="keep", power="keep")
+        reads = [read(lab, arms.queries)]
+        minutes = []
+        for minute in range(DRAIN_CAP_MINUTES):
+            lab.advance(3600)
+            reads.append(read(lab, arms.queries))
+            row = {arm: rates(reads[-2][arm], reads[-1][arm]) for arm in arms.names}
+            minutes.append(row)
+            if all(row[arm]["produced"].get(i, 0.0) < MADE_NOTHING for arm in row for i in module["products"]):
+                break
+    whole = {arm: rates(reads[0][arm], reads[-1][arm]) for arm in arms.names}
+    return {"slice": whole["slice"], "inplace": whole["inplace"], "minutes": minutes, "ledger": ledger,
+            "stock_at_switch": {arm: reads[0][arm]["stock"] for arm in arms.names}, "stopped": len(minutes) < DRAIN_CAP_MINUTES}
 
 
-def drain_table(run):
-    """The produced rates and stock drains of the two arms, with their errors."""
+def drain_table(run, products):
+    """What the two arms made after the switch: totals of the module products (gated), rates and drains (not)."""
     mine, base = run["slice"], run["inplace"]
-    return {"minutes": mine["minutes"], "ledger_entries": run["ledger"], "powered_networks": run["powered"],
-            "produced": compare(mine, base, set(mine["produced"]) | set(base["produced"]), key="produced"),
+    span = mine["minutes"]
+    totals = {i: {"slice": mine["produced"].get(i, 0.0) * span, "inplace": base["produced"].get(i, 0.0) * span}
+              for i in products}
+    for c in totals.values():
+        c["error"] = relative(c["slice"], c["inplace"], STOCK_FLOOR)
+    per_minute = [{arm: {i: row[arm]["produced"].get(i, 0.0) for i in products} for arm in row} for row in run["minutes"]]
+    return {"minutes": span, "stopped": run["stopped"], "ledger_entries": run["ledger"], "stock_at_switch": run["stock_at_switch"], "totals": totals,
+            "per_minute": per_minute,
+            "produced_rate": compare(mine, base, set(mine["produced"]) | set(base["produced"]), key="produced"),
             "drain": compare(mine, base, set(mine["stock"]) | set(base["stock"]), key="stock"),
             "net": compare(mine, base, set(mine["net"]) | set(base["net"]))}
 
 
 @fixture(source=SAVE, tags={"fidelity", "slow"})
 def fid_f9b(lab):
-    """F9b: after both arms switch to standard in one tick, the slice and the in-place cut drain alike.
+    """F9b: both arms switch to standard right after the build and run dry; they made the same total of each product.
 
-    A control repeats the run with a second slice in place of the in-place cut, started one tick later: the error
-    between two slices is the floor that a drain of this module can be reproduced to.
+    Timing while a stock drains is chaotic, so the gate is conservation: the total a finite stock makes. Rates,
+    intermediates and stock drains are in `data` ungated. A control repeats the run with a second slice, built one
+    tick later, in place of the in-place cut: it is the noise reference.
     """
     lab = sized(lab)
     module = next(m for m in corpus() if m["id"] == "redgreen")
     run = drain_run(lab, module, "inplace")
     if "unhandled" in run:
         return Result(False, f"unhandled ports {run['unhandled']}")
-    main = drain_table(run)
-    control = drain_table(drain_run(lab, module, "later"))
-    bad = [f"rate {i}: {c['slice']} vs {c['inplace']}" for i, c in main["produced"].items() if c["error"] > TOLERANCE]
-    bad += [f"drain {i}: {c['slice']} vs {c['inplace']}" for i, c in main["drain"].items() if c["error"] > TOLERANCE]
-    worst = {name: max(c["error"] for table in (t["produced"], t["drain"]) for c in table.values())
-             for name, t in (("arms", main), ("control", control))}
-    data = round_all({**main, "control": control, "worst_error": worst})
+    main = drain_table(run, module["products"])
+    control_run = drain_run(lab, module, "later")
+    control = drain_table(control_run, module["products"]) if "unhandled" not in control_run else control_run
+    bad = [f"{i} total {c['slice']:.1f} vs {c['inplace']:.1f}" for i, c in main["totals"].items()
+           if c["error"] > TOLERANCE or c["inplace"] <= 0]
+    if not main["stopped"]:
+        bad.append(f"the module still made product after {DRAIN_CAP_MINUTES} minutes")
+    data = round_all({**main, "control": control})
     if bad:
-        return Result(False, f"{'; '.join(bad)} (control, two slices one tick apart: worst error {worst['control']:.3f})",
-                      data=data)
-    return Result(True, f"{len(main['produced'])} rates and {len(main['drain'])} stock drains agree", data=data)
+        return Result(False, "; ".join(bad), data=data)
+    worst = max(c["error"] for c in main["totals"].values())
+    return Result(True, f"products ran dry in {main['minutes']:.0f} min with totals within {worst:.4f}", data=data)
 
 
 def combat_trial(lab, arm, seed):
