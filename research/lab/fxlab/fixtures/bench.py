@@ -88,3 +88,54 @@ def bench_standard(lab):
     return Result(not problems, "; ".join(problems) or
                   f"standard {json.dumps(std['rates'])} vs god {json.dumps(god['rates'])}, starved {len(std['starved'])}",
                   data=data)
+
+
+def _derived_ports(lab, area):
+    """The belt and pipe ports of a slice of `area`, as the blueprint bench takes them."""
+    lab.sbx("slice_build", name="derive", area=area)
+    try:
+        found = lab.sbx("slice_ports", name="derive")["ports"]
+    finally:
+        lab.sbx("slice_drop", name="derive")
+    out = []
+    for p in found or []:
+        if p["kind"] == "power":
+            continue
+        port = {"position": [p["position"]["x"], p["position"]["y"]], "kind": p["kind"], "role": p["role"]}
+        if p["role"] == "feed" and p.get("fluid"):
+            port["fluid"] = p["fluid"]
+        elif p["role"] == "feed":
+            port["items"] = list(p.get("items") or []) or [i for lane in p.get("lanes") or [] for i in lane or []]
+        out.append(port)
+    return out
+
+
+@fixture(source="run4-closeout", tags={"bench", "slow"})
+def bench_blueprint(lab):
+    """The red/green block captured as a blueprint, stamped on an empty surface, rates within 5% of the block on the slice.
+
+    A stamped design starts with empty belts and buffers, so it warms up for 8 minutes where the slice needs 2.
+    """
+    from .. import bench
+    ports = _derived_ports(lab, RED_GREEN)
+    (x0, y0), (x1, y1) = RED_GREEN
+    bp = lab.lua(f'local inv = game.create_inventory(1) inv[1].set_stack{{name = "blueprint"}} '
+                 f'inv[1].create_blueprint{{surface = game.surfaces.nauvis, force = "player", '
+                 f'area = {{{{{x0}, {y0}}}, {{{x1}, {y1}}}}}, include_trains = false, include_station_names = false}} '
+                 'rcon.print(inv[1].export_stack()) inv.destroy()').strip()
+    t0 = time.time()
+    area = bench.bench(lab, RED_GREEN, minutes=5, warmup=2)
+    t1 = time.time()
+    stamped = bench.bench(lab, RED_GREEN, blueprint=bp, ports=ports, minutes=5, warmup=8)
+    t2 = time.time()
+    red, green = ("automation-science-pack", "logistic-science-pack")
+    data = {"ports": ports, "area": area["rates"], "blueprint": stamped["rates"], "starved": stamped["starved"],
+            "wall_s": {"area": round(t1 - t0, 1), "blueprint": round(t2 - t1, 1)}}
+    problems = _record_problems(stamped)
+    for item in (red, green):
+        a, b = area["rates"].get(item, 0), stamped["rates"].get(item, 0)
+        if a <= 0 or abs(a - b) > 0.05 * a:
+            problems.append(f"{item}: blueprint {b} against area {a}")
+    return Result(not problems, "; ".join(problems) or
+                  f"blueprint red {stamped['rates'][red]}/min green {stamped['rates'][green]}/min, "
+                  f"area {area['rates'][red]}/{area['rates'][green]}", data=data)
