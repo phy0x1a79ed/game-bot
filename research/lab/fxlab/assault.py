@@ -6,6 +6,7 @@ the run removes at the end. `where="world"` runs on the full nauvis, restarting 
 `where="slice"` runs on a cloned square and resets it between seeds.
 """
 
+import fcntl
 import json
 import math
 import shutil
@@ -30,14 +31,33 @@ DRIVER = r"""
 local cfg = helpers.json_to_table(%(cfg)s)
 local surf = game.surfaces[cfg.surface]
 local nest = {x = cfg.nest[1], y = cfg.nest[2]}
-local A = {cfg = cfg, t0 = cfg.t0, given = {}, placed = {}, died = {}, kills = {}, lost_with = {}, tracked = {}}
+local A = {cfg = cfg, t0 = cfg.t0, given = {}, placed = {}, died = {}, kills = {}, lost_with = {}, tracked = {}, base = {}}
 assert(game.tick <= cfg.t0, "start tick " .. cfg.t0 .. " already passed at " .. game.tick)
 if ASSAULT then script.on_nth_tick(1, nil) script.on_event(defines.events.on_entity_died, nil) end
 ASSAULT = {A = A}
 
-local function track(e)
-  if e and e.valid and e.unit_number and not A.tracked[e.unit_number] then A.tracked[e.unit_number] = e end
+-- Items, grid equipment and fluid an entity holds, by name.
+local function contents(e)
+  local into = {}
+  local function put(name, n) into[name] = (into[name] or 0) + n end
+  for i = 1, (e.get_max_inventory_index() or 0) do
+    local inv = e.get_inventory(i)
+    if inv then for _, it in pairs(inv.get_contents()) do put(it.name, it.count) end end
+  end
+  if e.grid then for _, it in pairs(e.grid.get_contents()) do put(it.name, it.count or 1) end end
+  local ok, fl = pcall(e.get_fluid_contents)
+  if ok and fl then for n, amount in pairs(fl) do put(n, amount) end end
+  return into
 end
+
+-- An entity the tactic touches may already hold stock (a base turret), so its contents at first touch are not spend.
+local function track(e)
+  if e and e.valid and e.unit_number and not A.tracked[e.unit_number] then
+    A.tracked[e.unit_number] = e
+    A.base[e.unit_number] = contents(e)
+  end
+end
+ASSAULT.contents = contents
 local function entity_of(unit) return unit and game.get_entity_by_unit_number(unit) end
 
 local ctx = {box = cfg.box, surface = surf, force = cfg.force, nest = nest, params = cfg.params, tick0 = cfg.t0,
@@ -45,22 +65,21 @@ local ctx = {box = cfg.box, surface = surf, force = cfg.force, nest = nest, para
 
 function ctx.book(name, count) A.given[name] = (A.given[name] or 0) + count end
 
--- Items go in through the god `items` verb where it can address the entity, and by a plain insert elsewhere: the verb
--- finds an entity by unit number, which game.get_entity_by_unit_number gives for a character but not for a turret.
--- Returns how many fitted.
+-- Items go in through the god `items` verb. It addresses a character by unit number and anything else, such as a
+-- turret, by name and position. Returns how many fitted.
 function ctx.give(e, name, count)
   if count <= 0 then return 0 end
-  local n
-  if e.unit_number and entity_of(e.unit_number) == e then
-    local r = remote.call("sbx", "items", {name = cfg.box, target = "entity", entity = e.unit_number,
-                                            items = {{name = name, count = count}}})
-    if not r.ok then error("give " .. name .. ": " .. tostring(r.error) .. " " .. tostring(r.detail)) end
-    n = r.inserted[name] or 0
-  else
-    n = e.insert{name = name, count = count}
-  end
-  ctx.book(name, n)
   track(e)
+  local args = {name = cfg.box, target = "entity", items = {{name = name, count = count}}}
+  if e.unit_number and entity_of(e.unit_number) == e then
+    args.entity = e.unit_number
+  else
+    args.entity, args.at = e.name, e.position
+  end
+  local r = remote.call("sbx", "items", args)
+  if not r.ok then error("give " .. name .. ": " .. tostring(r.error) .. " " .. tostring(r.detail)) end
+  local n = r.inserted[name] or 0
+  ctx.book(name, n)
   return n
 end
 
@@ -95,12 +114,6 @@ assert(type(T) == "table" and T.setup and T.step, "a tactic returns {setup, step
 ASSAULT.T = T
 
 local R2 = (cfg.scan_radius + 60) ^ 2
-local function inventories(e, into)
-  for i = 1, (e.get_max_inventory_index() or 0) do
-    local inv = e.get_inventory(i)
-    if inv then for _, it in pairs(inv.get_contents()) do into[it.name] = (into[it.name] or 0) + it.count end end
-  end
-end
 
 script.on_event(defines.events.on_entity_died, function(ev)
   local e = ev.entity
@@ -110,7 +123,10 @@ script.on_event(defines.events.on_entity_died, function(ev)
   local f = e.force.name
   if f == cfg.force then
     A.died[e.name] = (A.died[e.name] or 0) + 1
-    if e.unit_number and A.tracked[e.unit_number] then inventories(e, A.lost_with) end
+    if e.unit_number and A.tracked[e.unit_number] then
+      local base = A.base[e.unit_number]
+      for n, c in pairs(contents(e)) do A.lost_with[n] = (A.lost_with[n] or 0) + c - (base[n] or 0) end
+    end
   elseif f == "enemy" then
     A.kills[e.name] = (A.kills[e.name] or 0) + 1
   end
@@ -148,19 +164,11 @@ local A, T = ASSAULT.A, ASSAULT.T
 local cfg = A.cfg
 local surf = game.surfaces[cfg.surface]
 local nest = {x = cfg.nest[1], y = cfg.nest[2]}
-local held, fluid = {}, {}
-local function put(into, name, n) into[name] = (into[name] or 0) + n end
-for _, e in pairs(A.tracked) do
+local held = {}
+for unit, e in pairs(A.tracked) do
   if e.valid then
-    for i = 1, (e.get_max_inventory_index() or 0) do
-      local inv = e.get_inventory(i)
-      if inv then for _, it in pairs(inv.get_contents()) do put(held, it.name, it.count) end end
-    end
-    if e.grid then
-      for _, it in pairs(e.grid.get_contents()) do put(held, it.name, it.count or 1) end
-    end
-    local ok, fl = pcall(e.get_fluid_contents)
-    if ok and fl then for n, amount in pairs(fl) do put(held, n, amount) end end
+    local base = A.base[unit]
+    for n, c in pairs(ASSAULT.contents(e)) do held[n] = (held[n] or 0) + c - (base[n] or 0) end
   end
 end
 local left = {spawners = 0, worms = 0, units = 0}
@@ -231,13 +239,15 @@ def assault_open(lab, nest_at, where="world", radius=144, name="assault"):
 
     `where="world"` adopts nauvis and the player force in place, so god calls act on the full world.
     `where="slice"` clones a square of `radius` around the nest onto its own surface, with the realm's research copied.
-    A world box restarts the lab's server between seeds, which reloads the save the lab started from. The same
-    restart gives a lab that an earlier run used back to its start state before this box opens.
+    A world box restarts the lab's server before it opens and between seeds, which reloads the save the lab started
+    from, so seed 1 starts from the same world as the others even on a lab that other code already advanced.
     """
     nest_at = [float(nest_at[0]), float(nest_at[1])]
     if where not in ("world", "slice"):
         raise ValueError("where is 'world' or 'slice'")
     box = {"box": name, "where": where, "area": _area(nest_at, radius), "nest_at": nest_at, "base_tick": None}
+    if where == "world":
+        _state(lab)["dirty"] = True
     _make(lab, box, clean=True)
     box["census"] = json.loads(lab.lua(CENSUS % {"surface": box["surface"], "x": nest_at[0], "y": nest_at[1]}))
     return box
@@ -249,18 +259,25 @@ def _ingame(lab):
 
 
 def _reload(lab, wait=180):
-    """Restart the lab's server on a fresh copy of its save, keeping its lease slot, which a down and up would give away.
+    """Restart the lab's server on a fresh copy of its save.
 
-    The server saves its map over the lab's copy when it stops, so the copy is replaced from the cache first.
+    The server saves its map over the lab's copy when it stops, so the copy is replaced from the cache first. The lease
+    lock is held from the stop to the start: the lease counts running servers, so without it another worktree's
+    `Lab.up` could take the slot in between and put one server too many on the box.
     """
     cached = [p for p in lab.saves.glob("*.zip") if (SHARED / "_saves" / p.name).exists()]
     if len(cached) != 1:
         raise RuntimeError(f"{lab.container}: cannot tell which save to reload from {[p.name for p in cached]}")
     seen = _ingame(lab)
     lab.close()
-    docker("stop", "-t", "10", lab.container)
-    shutil.copy(SHARED / "_saves" / cached[0].name, cached[0])
-    docker("start", lab.container)
+    with open(SHARED / "lease.lock", "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            docker("stop", "-t", "10", lab.container)
+            shutil.copy(SHARED / "_saves" / cached[0].name, cached[0])
+            docker("start", lab.container)
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)
     deadline = time.time() + wait
     while _ingame(lab) <= seen:
         if time.time() > deadline or not lab.running():
