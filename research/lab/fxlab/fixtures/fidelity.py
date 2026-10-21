@@ -381,7 +381,9 @@ def fid_f5(lab):
 
 
 def drain_run(lab, module, other):
-    """Warm up in god mode, switch both arms to standard in one tick and run them until the module stops.
+    """Switch both arms to standard in the tick after the build and run them until the module stops.
+
+    There is no god warm-up, so both arms start the drain from the same cloned stock.
 
     The energy interfaces stay (power="keep"), so the module drains its stock instead of freezing. A minute with
     no product on both arms ends the run, at most DRAIN_CAP_MINUTES after the switch.
@@ -389,7 +391,6 @@ def drain_run(lab, module, other):
     with Arms(lab, module["area"], other=other) as arms:
         if arms.unhandled():
             return {"unhandled": arms.unhandled()}
-        lab.advance(WARMUP)
         ledger = {a: lab.sbx("ledger", name=n)["count"] for a, n in arms.names.items()}
         for name in arms.names.values():
             lab.sbx("sbx_mode", name=name, mode="standard", research="keep", power="keep")
@@ -425,7 +426,7 @@ def drain_table(run, products):
 
 @fixture(source=SAVE, tags={"fidelity", "slow"})
 def fid_f9b(lab):
-    """F9b: after both arms switch to standard in one tick and run dry, they made the same total of each product.
+    """F9b: both arms switch to standard right after the build and run dry; they made the same total of each product.
 
     Timing while a stock drains is chaotic, so the gate is conservation: the total a finite stock makes. Rates,
     intermediates and stock drains are in `data` ungated. A control repeats the run with a second slice, built one
