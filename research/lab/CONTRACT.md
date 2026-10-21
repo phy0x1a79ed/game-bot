@@ -96,17 +96,18 @@ The slice is cloned to the same coordinates on the sandbox surface, so positions
 | `slice_timing` | | the last slice verb's phase timings, in ms |
 | `slice_reset_at` | `name`, `tick` | |
 | `slice_drop` | `name` | |
-| `slice_list` | | `slices`: name, area, entities, ports, unhandled counts |
+| `slice_list` | | `slices`: name, area, entities, ports, unhandled counts, `reset_at`, `last_error` |
 | `slice_ports` | `name` | `ports`, `unhandled`, `rails` in full |
 | `slice_area_of_base` | `surface = "nauvis"`, `force = "player"`, `pad = 32` | `area` |
 | `slice_fingerprint` | `name`, `which = "play" \| "snapshot" \| "source"`, `detail = false`, or `area` and `surface` instead of `name` | `digest`, `entities`, and with `detail` the per-entity records |
 
 `slice_fingerprint` hashes the slice's entities in a fixed order, excluding port closers: name, position, direction, inventories, belt line items, crafting progress, inserter hand, and fluids rounded to 1e-6. `snapshot` is the record taken on the play surface right after `slice_build`, because a force change empties fluids and the snapshot surface's own fluids never match. Fidelity F3 compares `play` after `slice_reset` with `snapshot`.
 
-- A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`, plus `how`, `tee`, `load`, `starved` and `scripted` that say how it is closed. An unhandled port is `{position, name, reason}`.
+- A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`, plus `how`, `tee`, `load`, `starved` and `scripted` that say how it is closed. An inserter or drill outside the rectangle that reaches into it is a port with `kind = "inserter"` and `how = "ext-inserter" | "ext-drill"`. An outside drill is replaced by an inserter fed from an infinity chest, so its rate is the inserter's, not the drill's. An unhandled port is `{position, name, reason}`.
 - A `LuaProfiler` cannot be read as a number inside the game, so no reply carries timings. Call `slice_timing` after the verb, or use `fixtures.slice.timed(lab, verb, **args)`, which does both.
 - `slice_inplace` cuts the rectangle out of its surroundings on the source surface: it removes each connection that crosses the edge, places the same closers as `slice_build` and an electric energy interface for power, and records every removed entity so `slice_drop` restores it.
-- `slice_reset` on a standard-mode sandbox restores the snapshot without port closers.
+- `slice_reset` on a standard-mode sandbox restores the snapshot without port closers and without the global electric network. `sbx_mode` to standard destroys that network too.
+- A failed scheduled reset never raises from `on_tick`. It shows up as `last_error` in `slice_list`.
 - A slice with unhandled ports stays playable. The bench refuses to rate it with `unhandled_ports`.
 
 ### God mode (`god.lua`, fxlab-god)

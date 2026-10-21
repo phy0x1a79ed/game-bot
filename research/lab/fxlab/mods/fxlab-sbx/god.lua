@@ -478,6 +478,8 @@ R.sbx_mode = function(a)
     end
   end
   if not keep then copy_research(f) end
+  -- a slice powers itself through a global network in god mode; standard rules run on its own generators
+  if not box.inplace then sbx.surface(box).destroy_global_electric_network() end
   box.mode = "standard"
   return {mode = "standard", undone = undone, skipped = skipped, research_entries = researched}
 end
