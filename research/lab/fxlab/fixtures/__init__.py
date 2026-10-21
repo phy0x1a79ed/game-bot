@@ -9,7 +9,7 @@ import traceback
 
 from .registry import FIXTURES, LUA, Result, fixture, near
 
-MODULES = ("core", "slice", "god", "cam", "fidelity", "tools", "bench", "assault", "render", "designs")
+MODULES = ("core", "slice", "god", "cam", "fidelity", "tools_read", "tools_build", "bench", "assault", "render", "designs")
 
 
 def _broken(module, error):

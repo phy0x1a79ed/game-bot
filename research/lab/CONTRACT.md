@@ -15,8 +15,8 @@ Each scope edits only the files it owns. A scope that needs a change in another 
 | `fxlab-god` | `mods/fxlab-sbx/god.lua`, `fixtures/god.py` |
 | `fxlab-cam` | `camera.py`, `mods/fxlab-sbx/view.lua`, `fixtures/cam.py` |
 | `fxlab-fid` | `fixtures/fidelity.py`, `research/lab/fidelity/` |
-| `fxlab-tools-read` | `research/tools/read/`, the read section of `fixtures/tools.py` |
-| `fxlab-tools-build` | `research/tools/build/`, the build section of `fixtures/tools.py` |
+| `fxlab-tools-read` | `research/tools/read/`, `fixtures/tools_read.py` |
+| `fxlab-tools-build` | `research/tools/build/`, `fixtures/tools_build.py` |
 | `fxlab-bench` | `bench.py`, `fixtures/bench.py` |
 | `fxlab-assault` | `assault.py`, `research/lab/tactics/`, `fixtures/assault.py` |
 | `fxlab-render` | `render.py`, `fixtures/render.py`, new verbs appended to `view.lua` |
