@@ -1295,6 +1295,18 @@ M.remote.slice_inplace = function(a)
       end
     end
     for _, list in pairs(outers) do for _, e in pairs(list) do take(e) end end
+    -- the slice has nothing behind a feed tee, so the tee belt curves and its loaders fill both lanes; a belt left
+    -- feeding it from behind keeps it straight and each loader side-loads one lane, so it moves to the stash too
+    for _, p in ipairs(ports) do
+      if p.tee then
+        local b = at({x = p.tee.x, y = p.tee.y}, -1, p.tee.dir)
+        for _, e in pairs(src.find_entities_filtered{area = {{b.x - 0.4, b.y - 0.4}, {b.x + 0.4, b.y + 0.4}},
+                                                      type = {"transport-belt", "underground-belt", "splitter",
+                                                              "loader", "loader-1x1", "linked-belt"}}) do
+          take(e)
+        end
+      end
+    end
     for _, ins in pairs(src.find_entities_filtered{area = pad(area, 4), type = "inserter"}) do
       if not inside[ins.unit_number] and (inrect(area, ins.pickup_position) or inrect(area, ins.drop_position)) then take(ins) end
     end
