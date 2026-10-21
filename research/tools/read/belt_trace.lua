@@ -2,16 +2,16 @@
 --- kind: call
 --- effect: read
 --- summary: follow a belt line downstream (and upstream with up = true) through undergrounds and splitters as straight segments, with items per lane and why each branch stops
---- args: x, y (a tile on the belt); up (bool: also trace upstream); taps (bool: list inserters that pick from or drop onto the line); limit (belt entities to visit, default 500, max 5000); surface
+--- args: x, y (a tile on the belt); up (bool: also trace upstream); taps (bool: list inserters that pick from or drop onto the line); limit (belt entities to visit, both directions together, default 200, max 500); surface
 --- returns: {start = {name, x, y}, tiles, segments = {{id, parent, kind, dir, from = {x, y}, to = {x, y}, n, left = {item = n}, right = {item = n}}, ...}, lanes = {left, right}, ends = {{seg, x, y, why = "end" | "loop" | "join" | "cap", faces}}, taps = {{name, x, y, seg, role = "pickup" | "drop", other = {name, x, y, recipe}}}, up = {same fields}}; segments run in flow order and parent is the segment they branch from; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
 local a = ...
 local c, err = rd.ctx(a, {point = true, extra = {"up", "taps", "limit"}})
 if not c then return err end
-local limit = a.limit == nil and 500 or a.limit
-if type(limit) ~= "number" or limit ~= math.floor(limit) or limit < 1 or limit > 5000 then
-  return rd.fail("limit must be a whole number from 1 to 5000", "got " .. tostring(a.limit))
+local limit = a.limit == nil and 200 or a.limit
+if type(limit) ~= "number" or limit ~= math.floor(limit) or limit < 1 or limit > 500 then
+  return rd.fail("limit must be a whole number from 1 to 500", "got " .. tostring(a.limit))
 end
 local s = c.s
 
@@ -74,7 +74,7 @@ end
 
 local function xy(p) return {rd.r2(p.x), rd.r2(p.y)} end
 
-local function trace(starts, fwd)
+local function trace(starts, fwd, limit)
   local segs, ends, visited = {}, {}, {}
   local count = 0
   local stack = {}
@@ -83,7 +83,9 @@ local function trace(starts, fwd)
     local item = table.remove(stack)
     local e0, parent = item[1], item[2]
     local seen = visited[e0.unit_number]
-    if seen then
+    if not seen and count >= limit then
+      ends[#ends + 1] = {seg = parent, x = rd.r2(e0.position.x), y = rd.r2(e0.position.y), why = "cap"}
+    elseif seen then
       local why, p = "join", parent
       while p do
         if p == seen then why = "loop" break end
@@ -180,6 +182,7 @@ local function find_taps(segs)
     for _, p in ipairs(seg.pts) do
       x0, y0, x1, y1 = math.min(x0, p.x), math.min(y0, p.y), math.max(x1, p.x), math.max(y1, p.y)
     end
+    if #seg.pts == 0 then x0, y0, x1, y1 = 0, 0, -1, -1 end
     for _, ins in pairs(s.find_entities_filtered{type = "inserter", area = {{x0 - 3, y0 - 3}, {x1 + 3, y1 + 3}}}) do
       local pk, dp = ins.pickup_position, ins.drop_position
       local from = owner[math.floor(pk.x) .. "," .. math.floor(pk.y)]
@@ -219,8 +222,8 @@ local function render(segs, ends, count, fwd)
   return out
 end
 
-local function finish(starts, fwd)
-  local segs, ends, count = trace(starts, fwd)
+local function finish(starts, fwd, limit)
+  local segs, ends, count = trace(starts, fwd, limit)
   local out = render(segs, ends, count, fwd)
   if a.taps then
     local taps = find_taps(segs)
@@ -233,13 +236,14 @@ local function finish(starts, fwd)
   return out
 end
 
-local out = finish({start}, true)
+local down_limit = a.up and math.ceil(limit / 2) or limit
+local out = finish({start}, true, down_limit)
 out.start = {name = start.name, x = rd.r2(start.position.x), y = rd.r2(start.position.y)}
 if a.up then
   local before = nexts(start, false)
   if start.type == "underground-belt" and start.belt_to_ground_type == "output" and start.underground_belt_neighbour then
     before = {start.underground_belt_neighbour}
   end
-  out.up = finish(before, false)
+  out.up = finish(before, false, limit - down_limit)
 end
 return out

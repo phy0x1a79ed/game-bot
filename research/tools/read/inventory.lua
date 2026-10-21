@@ -2,7 +2,7 @@
 --- kind: call
 --- effect: read
 --- summary: what machines and chests hold, by inventory kind and item; sum = true gives item totals only
---- args: x0, y0, x1, y1 (an area) or x, y with r (a point, default r 0); name, type (string or list); item (string or list: report only these); belts (bool: include items on belts); sum (bool); limit (default 200, max 1000), offset; surface, force
+--- args: x0, y0, x1, y1 (an area) or x, y with r (a point, default r 0); name, type (string or list); item (string or list: report only these); belts (bool: include items on belts); sum (bool); limit (default 200, max 300), offset; surface, force; rows come in engine order
 --- returns: {entities = {{name, x, y, input = {item = n}, output, fuel, modules, chest, ammo, belt, ...}, ...}, total, more, next} or {totals = {item = n}, entities = k}; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
@@ -27,7 +27,7 @@ if a.item ~= nil then
   want = set
 end
 if not (filter.names or filter.types) then
-  filter.types = {table.unpack(rd.INVENTORY_TYPES)}
+  filter.types = {table.unpack(rd.STOCK_TYPES)}
   if a.belts then
     for t in pairs(rd.BELT_TYPES) do filter.types[#filter.types + 1] = t end
   end
@@ -43,7 +43,10 @@ local function keep(items)
 end
 
 local rows, totals = {}, {}
-for _, e in ipairs(rd.find(c, filter)) do
+filter.unsorted, filter.cap = true, 1200
+local found, cut = rd.find(c, filter)
+if not found then return cut end
+for _, e in ipairs(found) do
   local row = {}
   local kinds = rd.inventories(e) or {}
   if a.belts and rd.BELT_TYPES[e.type] then
@@ -61,8 +64,10 @@ for _, e in ipairs(rd.find(c, filter)) do
     end
   end
   if any or (c.point and not want) then
-    local p = e.position
-    row.name, row.x, row.y = e.name, rd.r2(p.x), rd.r2(p.y)
+    if not a.sum then
+      local p = e.position
+      row.name, row.x, row.y = e.name, rd.r2(p.x), rd.r2(p.y)
+    end
     rows[#rows + 1] = row
   end
 end

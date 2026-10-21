@@ -2,7 +2,7 @@
 --- kind: call
 --- effect: read
 --- summary: the logistic network that covers a point (or its construction area): robots, idle robots, roboports, stored items; the nearest roboport when none covers it
---- args: x, y (a point); limit (items listed, default 50, max 1000), offset; surface, force (default player)
+--- args: x, y (a point); limit (items listed, default 50, max 300), offset; surface, force (default player)
 --- returns: {covered = true, covers = "logistic" | "construction", id, roboports, construction_robots, construction_idle, logistic_robots, logistic_idle, storages, requesters, providers, items = {name = n}, total, more, next} or {covered = false, nearest = {x, y, distance, logistic_radius, construction_radius, id}}; items are the biggest stacks first; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
