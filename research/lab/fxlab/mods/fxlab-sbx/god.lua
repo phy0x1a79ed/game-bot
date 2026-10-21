@@ -441,7 +441,8 @@ local function restore_research(f, e)
   if is_infinite(t) then t.level = e.before.level end
 end
 
--- sbx_mode{name, mode = "standard" | "god", research = "copy" | "keep"}
+-- sbx_mode{name, mode = "standard" | "god", research = "copy" | "keep", power = "keep" | "cut"}
+-- power = "keep" leaves the slice's energy interface in place: it stands for the grid the slice was cut from.
 R.sbx_mode = function(a)
   local box = sbx.get(a.name)
   if a.mode == "god" then
@@ -450,6 +451,8 @@ R.sbx_mode = function(a)
   elseif a.mode ~= "standard" then
     sbx.fail("bad_args", "mode is standard or god")
   end
+  if a.power ~= nil and a.power ~= "keep" and a.power ~= "cut" then sbx.fail("bad_args", "power is keep or cut") end
+  local cut_power = a.power == "cut"
   local f = sbx.force(box)
   local keep = a.research == "keep"
   -- A box on the player force has no copy to fall back on, so its research is replayed from the ledger.
@@ -459,7 +462,7 @@ R.sbx_mode = function(a)
   local undone, skipped, researched = 0, 0, 0
   for i = #list, 1, -1 do
     local e = list[i]
-    if not e.undone and not (skip_research and e.kind == "research") then
+    if not e.undone and not (skip_research and e.kind == "research") and not (e.power and not cut_power) then
       if e.kind == "entity" then
         if e.entity.valid then e.entity.destroy() else skipped = skipped + 1 end
       elseif e.kind == "body" then
@@ -486,8 +489,8 @@ R.sbx_mode = function(a)
   end
   if not keep then copy_research(f) end
   -- a slice powers itself through a global network in god mode; standard rules run on its own generators
-  if not box.inplace then sbx.surface(box).destroy_global_electric_network() end
-  box.mode = "standard"
+  if cut_power and not box.inplace then sbx.surface(box).destroy_global_electric_network() end
+  box.mode, box.power = "standard", cut_power and "cut" or "keep"
   return {mode = "standard", undone = undone, skipped = skipped, research_entries = researched}
 end
 

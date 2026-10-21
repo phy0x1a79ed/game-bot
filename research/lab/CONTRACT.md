@@ -82,7 +82,7 @@ Every god call records what it did with `sbx.ledger_add(name, entry)`. `entry.ki
 - `research`: `tech`, `before = {researched, level}`, `after`. Or `recipe`, with `before` and `after` as the enabled flag.
 - `body`: `entity`, `before = {reach, build, mine, destructible}`.
 
-`sbx_mode{name, mode = "standard", research = "copy" | "keep"}` walks the ledger backwards and undoes each entry. It skips an entity that is no longer valid. In standard mode every god verb fails with `standard_mode`, and reads still work. `sbx_mode{name, mode = "god"}` enables god verbs again. The ledger keeps growing across switches: an undone entry stays, flagged `undone`, so a second switch skips it. `research = "copy"` always ends with `copy_from(player)`, because standard rules mean the player's research. `slice_reset` prunes entity entries whose entity is gone.
+`sbx_mode{name, mode = "standard", research = "copy" | "keep", power = "keep" | "cut"}` walks the ledger backwards and undoes each entry. `power = "keep"`, the default, leaves the slice's energy interface (ledger entries flagged `power`) in place: it stands for the grid the slice was cut from, so a standard-mode module still runs while its item and fluid supply stops. `power = "cut"` removes it too, and the global electric network with it. It skips an entity that is no longer valid. In standard mode every god verb fails with `standard_mode`, and reads still work. `sbx_mode{name, mode = "god"}` enables god verbs again. The ledger keeps growing across switches: an undone entry stays, flagged `undone`, so a second switch skips it. `research = "copy"` always ends with `copy_from(player)`, because standard rules mean the player's research. `slice_reset` prunes entity entries whose entity is gone.
 
 ### Slicing (`slice.lua`, fxlab-slice)
 
@@ -106,7 +106,7 @@ The slice is cloned to the same coordinates on the sandbox surface, so positions
 - A port is `{position, kind = "belt" | "pipe" | "inserter" | "splitter" | "tank" | "power", role = "feed" | "drain", items | fluid, closer = <unit_number>}`, plus `how`, `tee`, `load`, `starved` and `scripted` that say how it is closed. An inserter or drill outside the rectangle that reaches into it is a port with `kind = "inserter"` and `how = "ext-inserter" | "ext-drill"`. An outside drill is replaced by an inserter fed from an infinity chest, so its rate is the inserter's, not the drill's. An unhandled port is `{position, name, reason}`.
 - A `LuaProfiler` cannot be read as a number inside the game, so no reply carries timings. Call `slice_timing` after the verb, or use `fixtures.slice.timed(lab, verb, **args)`, which does both.
 - `slice_inplace` cuts the rectangle out of its surroundings on the source surface: it removes each connection that crosses the edge, places the same closers as `slice_build` and an electric energy interface for power, and records every removed entity so `slice_drop` restores it.
-- `slice_reset` on a standard-mode sandbox restores the snapshot without port closers and without the global electric network. `sbx_mode` to standard destroys that network too.
+- `slice_reset` on a standard-mode sandbox restores the snapshot without port closers. It keeps the power interface unless the switch cut the power.
 - A failed scheduled reset never raises from `on_tick`. It shows up as `last_error` in `slice_list`.
 - A slice with unhandled ports stays playable. The bench refuses to rate it with `unhandled_ports`.
 

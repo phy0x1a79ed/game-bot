@@ -252,13 +252,13 @@ def _power_status(lab, surface):
 
 @fixture(source="run4-closeout", tags={"slice", "god"})
 def slice_standard_reset(lab):
-    """A standard-mode sandbox resets with no closers, no power interface and no global electric network."""
+    """A standard-mode sandbox with power cut resets with no closers, no power interface and no global network."""
     if "sbx_mode" not in _verbs(lab):
         return Result(True, "skipped: sbx_mode not yet merged")
     lab.sbx("slice_build", name="rg", area=RED_GREEN)
     lab.advance(120)
     god_status = _power_status(lab, "sbx-rg")
-    lab.sbx("sbx_mode", name="rg", mode="standard")
+    lab.sbx("sbx_mode", name="rg", mode="standard", power="cut")
     r = lab.sbx("slice_reset", name="rg")
     # the snapshot surface holds the closers the source already had, so it is the baseline for the whole play surface
     here = _surface_counts(lab, "sbx-rg", CLOSER_NAMES)
@@ -609,3 +609,28 @@ link(pole_in, pole_out, C)''')
     if wired["digest"] == before_fp["digest"]:
         return Result(False, "an extra wire does not change the fingerprint", data=data)
     return Result(True, "red, green and copper wires cut at the edge and restored by the drop", data=data)
+
+
+@fixture(source="run4-closeout", tags={"slice", "god"})
+def slice_standard_keep_power(lab):
+    """Standard mode keeps the slice's power by default: no item closer survives, the machines stay powered."""
+    if "sbx_mode" not in _verbs(lab):
+        return Result(True, "skipped: sbx_mode not yet merged")
+    lab.sbx("slice_build", name="rg", area=RED_GREEN)
+    lab.advance(120)
+    lab.sbx("sbx_mode", name="rg", mode="standard")
+    lab.advance(120)
+    before_reset = _power_status(lab, "sbx-rg")
+    lab.sbx("slice_reset", name="rg")
+    here = _surface_counts(lab, "sbx-rg", CLOSER_NAMES)
+    native = _surface_counts(lab, "sbx-rg-snap", CLOSER_NAMES)
+    kinds = sorted(p["kind"] for p in _listing(lab.sbx("slice_ports", name="rg")["ports"]))
+    lab.advance(120)
+    status = _power_status(lab, "sbx-rg")
+    data = {"play": here, "snapshot": native, "ports": kinds, "status_switch": before_reset, "status_reset": status}
+    unpowered = status.get("no_power", 0) + status.get("low_power", 0)
+    unpowered_switch = before_reset.get("no_power", 0) + before_reset.get("low_power", 0)
+    extra = {k: here[k] - native.get(k, 0) for k in here if here[k] != native.get(k, 0)}
+    ok = kinds == ["power"] and extra == {"electric-energy-interface": 1} and not unpowered and not unpowered_switch
+    return Result(ok, f"ports after reset {kinds}; extra closers {extra}; unpowered {unpowered_switch} after the switch, "
+                      f"{unpowered} after the reset", data=data)

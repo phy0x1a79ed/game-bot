@@ -843,7 +843,7 @@ local function power(name, S, s, force, area)
   eei.energy = 1e11
   S.closer_ids[eei.unit_number] = true
   S.closer_ents[#S.closer_ents + 1] = eei
-  sbx.ledger_add(name, {kind = "entity", entity = eei})
+  sbx.ledger_add(name, {kind = "entity", entity = eei, power = true})
   return {kind = "power", role = "feed", position = pos2(spot), closer = eei.unit_number}
 end
 
@@ -1029,6 +1029,9 @@ local function bring_up(name, box, S, trains_auto)
     S.ports = strip(done)
     for _, u in ipairs(refused) do S.unhandled[#S.unhandled + 1] = u end
     lap("power")
+    local pw = power(name, S, play, sbx.force(box), S.area)
+    if pw then S.ports[#S.ports + 1] = pw end
+  elseif box.power == "keep" then
     local pw = power(name, S, play, sbx.force(box), S.area)
     if pw then S.ports[#S.ports + 1] = pw end
   else
@@ -1225,7 +1228,7 @@ local function power_inplace(name, S, s, force, area, inside)
           eei.energy = 1e11
           S.closer_ids[eei.unit_number] = true
           S.closer_ents[#S.closer_ents + 1] = eei
-          sbx.ledger_add(name, {kind = "entity", entity = eei})
+          sbx.ledger_add(name, {kind = "entity", entity = eei, power = true})
           made[#made + 1] = {kind = "power", role = "feed", position = pos2(p), closer = eei.unit_number}
           done[id] = true
         else
