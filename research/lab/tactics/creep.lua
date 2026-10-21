@@ -5,7 +5,7 @@ local ctx = ...
 local surf, P = ctx.surface, ctx.params
 local TURRET = P.turret or "gun-turret"
 local AMMO = P.ammo
-if AMMO == nil then AMMO = P.fluid and false or "piercing-rounds-magazine" end
+if AMMO == nil and not P.fluid then AMMO = "piercing-rounds-magazine" end
 local FLUID = P.fluid
 local LOAD = P.load or 50
 local N = P.n or 8
@@ -53,7 +53,7 @@ end
 return {
   setup = function() end,
   step = function(tick)
-    if FLUID and tick % 60 == 0 then for _, t in pairs(mine()) do top_up(t) end end
+    if FLUID and (tick - ctx.tick0) % 60 == 0 then for _, t in pairs(mine()) do top_up(t) end end
     if tick < nextAt then return end
     local live = ctx.statics()
     if #live == 0 or stage >= MAXSTAGES then return true end
