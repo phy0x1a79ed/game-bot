@@ -1,32 +1,7 @@
-"""The fixture suite: each fixture builds a world in its own lab, exercises one tool, and reports pass or fail.
+"""Fixtures for the census, balance gate, waits census and acts."""
 
-A fixture returns a Result. `score` is optional and higher is better; the ratchet compares scores across
-tool versions only between fixtures of the same name.
-"""
-
-from dataclasses import dataclass, field
-from pathlib import Path
-
-from . import balance
-
-LUA = Path(__file__).resolve().parent / "lua"
-FIXTURES = {}
-
-
-@dataclass
-class Result:
-    ok: bool
-    detail: str = ""
-    score: float | None = None
-    data: dict = field(default_factory=dict)
-
-
-def fixture(source="create", tags=()):
-    """Register a fixture. `source` is "create" for a new world or the name of a realm save."""
-    def wrap(fn):
-        FIXTURES[fn.__name__] = {"fn": fn, "source": source, "tags": set(tags)}
-        return fn
-    return wrap
+from .. import balance
+from .registry import LUA, Result, fixture, near
 
 
 def mini_factory(lab):
@@ -42,10 +17,6 @@ def windowed(lab, act=None, ticks=18000):
     printed = lab.lua(act).strip() if act else ""
     lab.advance(ticks - ticks // 2)
     return balance.judge(before, balance.snapshot(lab)), printed
-
-
-def near(value, target, slack=4):
-    return abs(value - target) <= slack
 
 
 FX = 'local s = game.surfaces.fx '
@@ -127,22 +98,9 @@ def balance_run4_short(lab):
     return Result(all(v.ok for v in verdicts), "; ".join(v.summary() for v in verdicts))
 
 
-@fixture(source="run4-closeout", tags={"bench", "slow"})
-def bench_redgreen(lab):
-    """Capture the run 4 red/green block from the live base and rate it: the post-mortem bench read 63 and 57."""
-    from . import bench
-    bp, ports = bench.capture(lab, ((112, -42), (158, -10)))
-    r = bench.rate(lab, bp, minutes=5, warmup=2, ports=ports)
-    red = r["outputs"].get("automation-science-pack", 0)
-    green = r["outputs"].get("logistic-science-pack", 0)
-    ok = near(red, 63, 6.3) and near(green, 57, 5.7)
-    return Result(ok, f"red {red:.1f}/min green {green:.1f}/min, unhandled {r['unhandled']}",
-                  data={"rating": {k: r[k] for k in ("outputs", "inputs", "utilisation")}})
-
-
 def waits_cell(lab, cut=None):
     """Build the red-science cell, run a minute, optionally cut one input and run a minute more."""
-    from . import waits
+    from .. import waits
     cell = LUA / "fixture-waits.lua"
     if "deleted" in lab.lua_file(cell, prelude="WC_CUT = nil\n"):
         lab.lua_file(cell, prelude="WC_CUT = nil\n")
@@ -180,7 +138,7 @@ def waits_cut_iron(lab):
 @fixture(source="run4-closeout", tags={"waits", "slow"})
 def waits_run4(lab):
     """The post-mortem found run 4 iron-starved: the census on its closeout must name iron-plate first."""
-    from . import waits
+    from .. import waits
     r = waits.census(lab)
     return Result(bool(r["waits"]) and r["waits"][0]["item"] == "iron-plate", "; ".join(waits.top(r, 5)),
                   data={"top": waits.top(r, 15), "other": r["other"]})
@@ -189,7 +147,7 @@ def waits_run4(lab):
 @fixture(tags={"acts"})
 def acts_remove_off_by_one(lab):
     """A removal aimed one tile off is refused and names the real target. The exact one marks only that chest."""
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     off = acts.act(lab, "remove", "fx", name="iron-chest", x=-5.5, y=-6.5)
     exact = acts.act(lab, "remove", "fx", name="iron-chest", x=-6.5, y=-6.5)
@@ -201,7 +159,7 @@ def acts_remove_off_by_one(lab):
 
 @fixture(tags={"acts"})
 def acts_refusals(lab):
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     tries = {
         "collision": acts.act(lab, "ghost", "fx", name="iron-chest", x=-0.5, y=-6.5),
@@ -217,7 +175,7 @@ def acts_refusals(lab):
 @fixture(tags={"acts", "balance"})
 def acts_window_balanced(lab):
     """A window of acts (recipe swap that displaces items, a ghost, a removal) passes the balance gate."""
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     lab.lua(FX + 'local a = s.find_entities_filtered{name = "assembling-machine-2"}[1] '
                  'a.get_inventory(defines.inventory.crafter_input).insert{name = "iron-plate", count = 100}')
@@ -238,7 +196,7 @@ def acts_window_balanced(lab):
 @fixture(tags={"acts"})
 def acts_reads(lab):
     """The read-only acts see the mini-factory as it is: two ore patches with one drill each, a robot network, gears made."""
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     ore = {p["name"]: p for p in acts.act(lab, "resources", "fx", x0=-20, y0=-20, x1=20, y1=20)["did"]}
     net = acts.act(lab, "network", "fx", x=10, y=-10)
@@ -255,7 +213,7 @@ def acts_reads(lab):
 def acts_ghost_hint(lab):
     """A ghost aimed at an occupied tile is refused naming what is there, and the spot it suggests takes the ghost."""
     import re
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     miss = acts.act(lab, "ghost", "fx", name="assembling-machine-2", x=-0.5, y=-6.5)
     m = re.search(r"fits is \((-?[\d.]+), (-?[\d.]+)\)", miss.get("refused", ""))
@@ -267,7 +225,7 @@ def acts_ghost_hint(lab):
 @fixture(tags={"acts"})
 def acts_construction_reach(lab):
     """Robots build past the logistic area (25 tiles): a point 30 tiles from the roboport is covered, one 80 off is not."""
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     inside = acts.act(lab, "network", "fx", x=40, y=-10)
     ghost = acts.act(lab, "ghost", "fx", name="transport-belt", x=39.5, y=-10.5)
@@ -279,7 +237,7 @@ def acts_construction_reach(lab):
 @fixture(tags={"acts"})
 def acts_ghosts_batch(lab):
     """A batch places what fits, names what does not, and robots build the placed ghosts."""
-    from . import acts
+    from .. import acts
     mini_factory(lab)
     r = acts.act(lab, "ghosts", "fx", list=[["transport-belt", 5.5, -17.5, "east"], ["transport-belt", 6.5, -17.5, "east"],
                                             ["transport-belt", 7.5, -17.5, "east"], ["transport-belt", -6.5, -6.5, "east"]])
@@ -288,3 +246,56 @@ def acts_ghosts_batch(lab):
     ok = (r["did"] == "placed 3 of 4 ghosts" and len(r.get("refused", [])) == 1 and "iron-chest" in r["refused"][0]
           and [e["name"] for e in built] == ["transport-belt"] * 3)
     return Result(ok, f"{r['did']}; {r.get('refused')}; built {len(built)}")
+
+
+TOOL_LIB = """--- tool: fx_geom
+--- kind: lib
+--- effect: read
+--- summary: distance helper
+--- args: none
+--- returns: {dist}
+return {dist = function(a, b) return ((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) ^ 0.5 end}
+"""
+
+TOOL_CALL = """--- tool: fx_near
+--- kind: call
+--- effect: read
+--- summary: count entities within r of a point, and bump a per-tool counter
+--- args: x, y, r (numbers)
+--- returns: {n, calls}
+--- uses: fx_geom
+local a = ...
+local g = use("fx_geom")
+local n = 0
+for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{position = {a.x, a.y}, radius = a.r}) do
+  if g.dist(e.position, {x = a.x, y = a.y}) <= a.r then n = n + 1 end
+end
+storage.calls = (storage.calls or 0) + 1
+return {n = n, calls = storage.calls}
+"""
+
+
+@fixture(tags={"tools"}, camera=True)
+def tools_registry_peer(lab):
+    """tools.sync and tools.call through game-bot-control 0.6 with the camera as a second peer: no desync."""
+    import tempfile
+    from pathlib import Path
+    from .. import camera, tools
+    version = lab.lua('rcon.print(script.active_mods["game-bot-control"])').strip()
+    if tuple(int(p) for p in version.split(".")) < (0, 6, 1):
+        return Result(True, f"skipped: game-bot-control {version} has no tool registry; set FXLAB_GBC_MOD")
+    with tempfile.TemporaryDirectory() as root:
+        for name, code in (("fx_near", TOOL_CALL), ("fx_geom", TOOL_LIB)):
+            (Path(root) / f"{name}.lua").write_text(code)
+        order = tools.sync(lab, root=root)
+    first = tools.call(lab, "fx_near", x=0, y=0, r=64)
+    lab.advance(120)
+    second = tools.call(lab, "fx_near", x=0, y=0, r=64)
+    listed = {t["name"]: t for t in tools.listing(lab)}
+    connected = lab.lua('local p = game.players["fxcam"] rcon.print(tostring(p and p.connected))').strip()
+    bad = camera.desyncs(lab)
+    ok = (order == ["fx_geom", "fx_near"] and first["calls"] == 1 and second["calls"] == 2
+          and listed["fx_near"]["calls"] == 2 and connected == "true" and not bad)
+    return Result(ok, f"order {order}; calls {first['calls']}, {second['calls']}; n {first['n']}; "
+                      f"camera connected {connected}; desync lines {len(bad)}",
+                  data={"desyncs": bad[:5]})
