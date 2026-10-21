@@ -571,9 +571,12 @@ local function find_ports(src, area, inside)
           local dir = direction_of(e.position, dp)
           local tile = {x = math.floor(dp.x) + 0.5, y = math.floor(dp.y) + 0.5}
           local items = {}
+          -- a drill that has not ticked yet has no mining_target: read the ore under it instead
           local mined = e.mining_target
-          if mined and mined.valid then
-            for _, prod in pairs(mined.prototype.mineable_properties.products or {}) do
+          local ores = (mined and mined.valid) and {mined}
+            or src.find_entities_filtered{area = e.bounding_box, type = "resource", limit = 1}
+          for _, ore in pairs(ores) do
+            for _, prod in pairs(ore.prototype.mineable_properties.products or {}) do
               if prod.type == "item" then items[prod.name] = true end
             end
           end

@@ -246,3 +246,56 @@ def acts_ghosts_batch(lab):
     ok = (r["did"] == "placed 3 of 4 ghosts" and len(r.get("refused", [])) == 1 and "iron-chest" in r["refused"][0]
           and [e["name"] for e in built] == ["transport-belt"] * 3)
     return Result(ok, f"{r['did']}; {r.get('refused')}; built {len(built)}")
+
+
+TOOL_LIB = """--- tool: fx_geom
+--- kind: lib
+--- effect: read
+--- summary: distance helper
+--- args: none
+--- returns: {dist}
+return {dist = function(a, b) return ((a.x - b.x) ^ 2 + (a.y - b.y) ^ 2) ^ 0.5 end}
+"""
+
+TOOL_CALL = """--- tool: fx_near
+--- kind: call
+--- effect: read
+--- summary: count entities within r of a point, and bump a per-tool counter
+--- args: x, y, r (numbers)
+--- returns: {n, calls}
+--- uses: fx_geom
+local a = ...
+local g = use("fx_geom")
+local n = 0
+for _, e in pairs(game.surfaces.nauvis.find_entities_filtered{position = {a.x, a.y}, radius = a.r}) do
+  if g.dist(e.position, {x = a.x, y = a.y}) <= a.r then n = n + 1 end
+end
+storage.calls = (storage.calls or 0) + 1
+return {n = n, calls = storage.calls}
+"""
+
+
+@fixture(tags={"tools"}, camera=True)
+def tools_registry_peer(lab):
+    """tools.sync and tools.call through game-bot-control 0.6 with the camera as a second peer: no desync."""
+    import tempfile
+    from pathlib import Path
+    from .. import camera, tools
+    version = lab.lua('rcon.print(script.active_mods["game-bot-control"])').strip()
+    if tuple(int(p) for p in version.split(".")) < (0, 6, 1):
+        return Result(True, f"skipped: game-bot-control {version} has no tool registry; set FXLAB_GBC_MOD")
+    with tempfile.TemporaryDirectory() as root:
+        for name, code in (("fx_near", TOOL_CALL), ("fx_geom", TOOL_LIB)):
+            (Path(root) / f"{name}.lua").write_text(code)
+        order = tools.sync(lab, root=root)
+    first = tools.call(lab, "fx_near", x=0, y=0, r=64)
+    lab.advance(120)
+    second = tools.call(lab, "fx_near", x=0, y=0, r=64)
+    listed = {t["name"]: t for t in tools.listing(lab)}
+    connected = lab.lua('local p = game.players["fxcam"] rcon.print(tostring(p and p.connected))').strip()
+    bad = camera.desyncs(lab)
+    ok = (order == ["fx_geom", "fx_near"] and first["calls"] == 1 and second["calls"] == 2
+          and listed["fx_near"]["calls"] == 2 and connected == "true" and not bad)
+    return Result(ok, f"order {order}; calls {first['calls']}, {second['calls']}; n {first['n']}; "
+                      f"camera connected {connected}; desync lines {len(bad)}",
+                  data={"desyncs": bad[:5]})
