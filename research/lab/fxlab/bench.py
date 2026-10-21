@@ -43,7 +43,7 @@ for _, e in pairs(s.find_entities_filtered{type = {"assembling-machine", "furnac
                              time = m.mining_time, products = products(m.products or {})}
     end
   else
-    local r = e.get_recipe() or e.previous_recipe
+    local r = e.get_recipe() or (e.previous_recipe and prototypes.recipe[e.previous_recipe.name])
     if r then
       machines[#machines + 1] = {id = e.unit_number, recipe = r.name, finished = e.products_finished,
                                  speed = e.crafting_speed, bonus = e.productivity_bonus, energy = r.energy,
@@ -93,9 +93,11 @@ s.generate_with_lab_tiles = true
 s.always_day = true
 s.request_to_generate_chunks({0, 0}, math.ceil(math.max(hi[1] - lo[1], hi[2] - lo[2]) / 64) + 3)
 s.force_generate_chunk_requests()
-local ghosts = stack.build_blueprint{surface = s, force = "player", position = {0, 0}, force_build = true}
+local ghosts = stack.build_blueprint{surface = s, force = "player", position = {0, 0}, build_mode = defines.build_mode.forced}
 local glo = {1e9, 1e9}
-for _, g in pairs(ghosts) do glo = {math.min(glo[1], g.position.x), math.min(glo[2], g.position.y)} end
+for _, g in pairs(ghosts) do
+  if g.type == "entity-ghost" then glo = {math.min(glo[1], g.position.x), math.min(glo[2], g.position.y)} end
+end
 for _, g in pairs(ghosts) do if g.valid then g.revive() end end
 local box = {1e9, 1e9, -1e9, -1e9}
 local n = 0
@@ -264,14 +266,15 @@ def _rates(first, last, minutes):
 
 
 def _utilisation(first, last, ticks):
+    """Per recipe, products finished over products possible. `products_finished` counts productivity bonus crafts."""
     before = {m["id"]: m["finished"] for m in first["machines"]}
     done, possible = {}, {}
     for m in last["machines"]:
         if m["id"] not in before or not m["energy"]:
             continue
         done[m["recipe"]] = done.get(m["recipe"], 0) + m["finished"] - before[m["id"]]
-        possible[m["recipe"]] = possible.get(m["recipe"], 0) + m["speed"] * ticks / (m["energy"] * 60)
-    return {r: round(min(1.0, done[r] / possible[r]), 3) for r in sorted(done) if possible[r] > 0}
+        possible[m["recipe"]] = possible.get(m["recipe"], 0) + m["speed"] * (1 + m["bonus"]) * ticks / (m["energy"] * 60)
+    return {r: round(done[r] / possible[r], 3) for r in sorted(done) if possible[r] > 0}
 
 
 def _ceiling(last):
@@ -321,6 +324,22 @@ def _xy(position):
     return (position["x"], position["y"]) if isinstance(position, dict) else tuple(position)
 
 
+def _cleanup(lab, name, surface, quiet=False):
+    """Drop the slice and delete the stamp surface. With quiet, a failure here never hides the error being raised."""
+    try:
+        _drop(lab, name)
+    except Exception:
+        if not quiet:
+            raise
+    finally:
+        if surface:
+            try:
+                lab.lua(f'game.delete_surface("{surface}")')
+            except Exception:
+                if not quiet:
+                    raise
+
+
 def _expect_ports(found, given):
     """Every given port must have a slice port of its role within a tile of it."""
     for g in given:
@@ -333,7 +352,7 @@ def _expect_ports(found, given):
                            f"found {[(p.get('role'), p['position']['x'], p['position']['y']) for p in found]}")
 
 
-def _measure(lab, area, name, minutes, warmup, mode, speed, source="nauvis", expect=()):
+def _measure(lab, area, name, minutes, warmup, mode, power, speed, source="nauvis", expect=()):
     """Build the slice, run it, and return the measurements of the record. The slice stays for the caller to drop."""
     built = lab.sbx("slice_build", name=name, area=[list(p) for p in area], source=source, research="copy")
     unhandled = _listing(built["unhandled"])
@@ -346,7 +365,7 @@ def _measure(lab, area, name, minutes, warmup, mode, speed, source="nauvis", exp
                  feeds=[{"kind": p["kind"], "position": p["position"], "closer": _closer_probe(p)} for p in feeds])
     lab.advance(warmup * TICKS_PER_MIN, speed=speed)
     if mode == "standard":
-        lab.sbx("sbx_mode", name=name, mode="standard", research="keep")
+        lab.sbx("sbx_mode", name=name, mode="standard", research="keep", power=power)
     first = _snapshot(lab, name)
     probes = []
     for _ in range(minutes):
@@ -364,17 +383,20 @@ def _measure(lab, area, name, minutes, warmup, mode, speed, source="nauvis", exp
 
 
 def bench(lab, area=None, save=None, blueprint=None, ports=None, minutes=10, warmup=3, mode="god", name=None,
-          speed=1000.0):
+          speed=1000.0, power="keep"):
     """Rate a module and return its bench record.
 
     The subject is a rectangle of the lab's world (`area` as ((x0, y0), (x1, y1)); `save` names the world for the
     record) or a blueprint string with its `ports`. A slice with unhandled ports raises
-    SbxError("unhandled_ports", list). mode="standard" cuts the supply and the power after the warm-up.
+    SbxError("unhandled_ports", list). mode="standard" cuts the item and fluid supply after the
+    warm-up; `power` ("keep" or "cut") says whether the slice's energy interface stays.
     A blueprint is stamped on a fresh surface of the lab, see `stamp` for `area` and `ports`. It starts with empty
     belts and buffers, so give it a longer warm-up than a slice of a running base: about 8 minutes for red/green.
     """
     if mode not in ("god", "standard"):
         raise ValueError(f"mode {mode!r}: god or standard")
+    if power not in ("keep", "cut"):
+        raise ValueError(f"power {power!r}: keep or cut")
     name = name or "bench"
     surface, source, expect = None, "nauvis", ()
     try:
@@ -386,14 +408,15 @@ def bench(lab, area=None, save=None, blueprint=None, ports=None, minutes=10, war
             raise ValueError("bench needs an area or a blueprint")
         else:
             subject = {"area": [list(p) for p in area], "save": save or _save_of(lab)}
-        measured = _measure(lab, area, name, minutes, warmup, mode, speed, source, expect)
-    finally:
-        _drop(lab, name)
-        if surface:
-            lab.lua(f'game.delete_surface("{surface}")')
+        measured = _measure(lab, area, name, minutes, warmup, mode, power, speed, source, expect)
+    except BaseException:
+        _cleanup(lab, name, surface, quiet=True)
+        raise
+    _cleanup(lab, name, surface)
     return {
         "subject": subject,
         "mode": mode,
+        "power": power,
         "warmup_min": warmup,
         "minutes": minutes,
         **measured,
@@ -447,10 +470,12 @@ def register(sub):
     p.add_argument("--minutes", type=int, default=10)
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--mode", choices=("god", "standard"), default="god")
+    p.add_argument("--power", choices=("keep", "cut"), default="keep")
 
     def run(a):
         from .lab import Lab
-        record = bench(Lab(a.name), ((a.x0, a.y0), (a.x1, a.y1)), minutes=a.minutes, warmup=a.warmup, mode=a.mode)
+        record = bench(Lab(a.name), ((a.x0, a.y0), (a.x1, a.y1)), minutes=a.minutes, warmup=a.warmup, mode=a.mode,
+                       power=a.power)
         print(json.dumps(record, indent=1))
 
     return {"bench": run}
