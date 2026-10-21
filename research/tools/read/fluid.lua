@@ -2,7 +2,7 @@
 --- kind: call
 --- effect: read
 --- summary: fluid segments (connected pipe systems) that touch an area: fluid, amount, capacity and the entities on each
---- args: x0, y0, x1, y1 (numbers); fluid (a fluid name or a list: only these); limit (segments, default 200, max 1000), offset; surface, force (default player)
+--- args: x0, y0, x1, y1 (numbers); fluid (a fluid name or a list: only these); limit (segments, default 200, max 300), offset; surface, force (default player)
 --- returns: {segments = {{id, fluid, temperature, amount, capacity, fill, x0, y0, x1, y1, partial, n, entities = {name = n}, ends = {{name, x, y, recipe}}}, ...}, total, more, next}; the box is the whole segment, partial = true when it reaches outside the area, n and entities count what is inside the area, ends are the machines, tanks and pumps (up to 8), fluid is absent for an empty segment; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
@@ -17,17 +17,14 @@ if a.fluid ~= nil then
   want = set
 end
 
-local types = {}
-for _, p in pairs(prototypes.entity) do
-  if #p.fluidbox_prototypes > 0 then types[p.type] = true end
-end
-local list = {}
-for t in pairs(types) do list[#list + 1] = t end
-table.sort(list)
+local list = {"pipe", "pipe-to-ground", "storage-tank", "pump", "offshore-pump", "boiler", "generator",
+  "assembling-machine", "furnace", "mining-drill", "fluid-turret", "fluid-wagon", "valve", "reactor"}
 
 local PLUMBING = {pipe = true, ["pipe-to-ground"] = true}
 local segments, order = {}, {}
-for _, e in ipairs(rd.find(c, {types = list, ghosts = false})) do
+local members, cut = rd.find(c, {types = list, ghosts = false, unsorted = true})
+if not members then return cut end
+for _, e in ipairs(members) do
   for i = 1, e.fluids_count do
     if e.has_fluid_segment(i) then
       local id = e.get_fluid_segment_id(i)

@@ -1,8 +1,8 @@
 --- tool: resources
 --- kind: call
 --- effect: read
---- summary: ore patches in an area, largest first, with amount, tile count, bounding box and the drills mining each
---- args: x0, y0, x1, y1 (numbers); name (an ore name or a list); limit (default 200, max 1000), offset; surface, force (the force whose drills are counted, default player)
+--- summary: ore patches in an area, largest first, with amount, tile count, bounding box and the drills standing at each
+--- args: x0, y0, x1, y1 (numbers); name (an ore name or a list); limit (default 200, max 300), offset; surface, force (the force whose drills are counted, default player)
 --- returns: {patches = {{name, tiles, amount, x0, y0, x1, y1, drills, infinite}, ...}, total, more, next}; the box edges are tile edges; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
@@ -20,6 +20,11 @@ if a.name ~= nil then
     end
   end
   query.name = list
+end
+
+local TILE_CAP = 4000
+if c.s.count_entities_filtered{area = c.area, type = "resource", name = query.name, limit = TILE_CAP + 1} > TILE_CAP then
+  return rd.fail("more than " .. TILE_CAP .. " ore tiles in that area", "narrow the area, or name one ore")
 end
 
 -- group by 32-tile chunk and ore, then join touching chunks of the same ore into one patch
@@ -64,30 +69,16 @@ for _, key in ipairs(keys) do
   end
 end
 
--- a drill counts for a patch when its mining area holds that ore
-local drills = c.s.find_entities_filtered{area = {{c.x0 - 4, c.y0 - 4}, {c.x1 + 4, c.y1 + 4}}, type = "mining-drill",
-  force = c.force}
-local mined = {}
-for i, d in ipairs(drills) do
-  local radius = d.prototype.mining_drill_radius
-  local p = d.position
-  local names = {}
-  for _, r in pairs(c.s.find_entities_filtered{area = {{p.x - radius, p.y - radius}, {p.x + radius, p.y + radius}}, type = "resource"}) do
-    names[r.name] = true
-  end
-  mined[i] = {x = p.x, y = p.y, names = names}
-end
-for _, p in ipairs(patches) do
-  local n = 0
-  for _, d in ipairs(mined) do
-    if d.names[p.name] and d.x >= p.x0 - 3 and d.x <= p.x1 + 3 and d.y >= p.y0 - 3 and d.y <= p.y1 + 3 then n = n + 1 end
-  end
-  p.drills = n
-end
-
 table.sort(patches, function(p, q)
   if p.amount ~= q.amount then return p.amount > q.amount end
   if p.name ~= q.name then return p.name < q.name end
   return p.x0 < q.x0
 end)
-return rd.page({}, "patches", patches, c)
+local res = rd.page({}, "patches", patches, c)
+
+-- one count per listed patch: the drills standing within three tiles of its box
+for _, p in ipairs(res.patches) do
+  p.drills = c.s.count_entities_filtered{area = {{p.x0 - 3, p.y0 - 3}, {p.x1 + 3, p.y1 + 3}}, type = "mining-drill",
+    force = c.force}
+end
+return res

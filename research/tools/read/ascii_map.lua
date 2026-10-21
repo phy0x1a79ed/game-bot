@@ -99,45 +99,63 @@ local function symbol(e)
   return spare(e.name), e.name
 end
 
--- later layers overwrite earlier ones
+-- later layers overwrite earlier ones; the engine order inside a layer is fixed
 local RANK = {resource = 1, tree = 2, ["simple-entity"] = 2, cliff = 2, ["simple-entity-with-owner"] = 2}
-local ents = {}
+local layers = {{}, {}, {}, {}}
 for _, e in pairs(c.s.find_entities_filtered{area = {{X0, Y0}, {X0 + W, Y0 + H}}}) do
-  if not SKIP[e.type] then
-    local rank = RANK[e.type] or 3
-    if e.type == "entity-ghost" then rank = 4 end
-    if scenery or rank ~= 2 then ents[#ents + 1] = {e = e, rank = rank} end
+  local t = e.type
+  if not SKIP[t] then
+    local rank = t == "entity-ghost" and 4 or RANK[t] or 3
+    if scenery or rank ~= 2 then local layer = layers[rank] layer[#layer + 1] = e end
   end
 end
-table.sort(ents, function(p, q)
-  if p.rank ~= q.rank then return p.rank < q.rank end
-  local pa, pb = p.e.position, q.e.position
-  if pa.y ~= pb.y then return pa.y < pb.y end
-  return pa.x < pb.x
-end)
 
-for _, item in ipairs(ents) do
-  local e = item.e
-  local ch, meaning = symbol(e)
-  legend[ch] = legend[ch] or meaning
-  if legend[ch] ~= meaning and not legend[ch]:find(meaning, 1, true) and #legend[ch] < 60 then
-    legend[ch] = legend[ch] .. ", " .. meaning
+-- an entity with a collision box under one tile covers the tile it stands on and needs no bounding box
+local SMALL = {}
+local function small(name)
+  local v = SMALL[name]
+  if v == nil then
+    local b = prototypes.entity[name].collision_box
+    v = b.right_bottom.x - b.left_top.x < 1.0 and b.right_bottom.y - b.left_top.y < 1.0
+    SMALL[name] = v
   end
-  if e.type == "resource" then
-    local x, y = math.floor(e.position.x), math.floor(e.position.y)
-    local here = get(x, y)
-    if here == "." or here == "~" then put(x, y, ch) end
-  elseif item.rank == 4 then
-    local bb = e.bounding_box
-    for y = math.floor(bb.left_top.y + 0.01), math.ceil(bb.right_bottom.y - 0.01) - 1 do
-      for x = math.floor(bb.left_top.x + 0.01), math.ceil(bb.right_bottom.x - 0.01) - 1 do
-        if get(x, y) == "." then put(x, y, ch) end
-      end
-    end
+  return v
+end
+
+local function cover(e, ch, empty_only)
+  local x0, y0, x1, y1
+  if e.type ~= "entity-ghost" and small(e.name) then
+    local p = e.position
+    x0, y0 = math.floor(p.x), math.floor(p.y)
+    x1, y1 = x0, y0
   else
     local bb = e.bounding_box
-    for y = math.floor(bb.left_top.y + 0.01), math.ceil(bb.right_bottom.y - 0.01) - 1 do
-      for x = math.floor(bb.left_top.x + 0.01), math.ceil(bb.right_bottom.x - 0.01) - 1 do put(x, y, ch) end
+    x0, y0 = math.floor(bb.left_top.x + 0.01), math.floor(bb.left_top.y + 0.01)
+    x1, y1 = math.ceil(bb.right_bottom.x - 0.01) - 1, math.ceil(bb.right_bottom.y - 0.01) - 1
+  end
+  for y = y0, y1 do
+    for x = x0, x1 do
+      if not empty_only or get(x, y) == "." then put(x, y, ch) end
+    end
+  end
+end
+
+for rank, layer in ipairs(layers) do
+  for _, e in ipairs(layer) do
+    local ch, meaning = symbol(e)
+    local known = legend[ch]
+    if not known then
+      legend[ch] = meaning
+    elseif known ~= meaning and #known < 60 and not known:find(meaning, 1, true) then
+      legend[ch] = known .. ", " .. meaning
+    end
+    if rank == 1 then
+      local p = e.position
+      local x, y = math.floor(p.x), math.floor(p.y)
+      local here = get(x, y)
+      if here == "." or here == "~" then put(x, y, ch) end
+    else
+      cover(e, ch, rank == 4)
     end
   end
 end

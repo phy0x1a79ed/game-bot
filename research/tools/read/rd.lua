@@ -10,7 +10,7 @@ local DIR, STATUS = {}, {}
 for k, v in pairs(defines.direction) do DIR[v] = k end
 for k, v in pairs(defines.entity_status) do STATUS[v] = k end
 
-local MAX_LIMIT, MAX_SIDE = 1000, 4000
+local MAX_LIMIT, MAX_SIDE = 300, 4000
 
 function rd.r2(v) return math.floor(v * 100 + 0.5) / 100 end
 function rd.dir(d) return DIR[d] end
@@ -66,6 +66,8 @@ function rd.ctx(a, spec)
   end
 
   local c = {surface = a.surface or "nauvis", force = a.force or "player"}
+  if type(c.surface) ~= "string" then return nil, rd.fail("surface must be a name", "got " .. type(c.surface)) end
+  if type(c.force) ~= "string" then return nil, rd.fail("force must be a name", "got " .. type(c.force)) end
   c.s = game.surfaces[c.surface]
   if not c.s then
     local names = {}
@@ -218,6 +220,11 @@ local ROLES = {
 rd.INVENTORY_TYPES = {}
 for t in pairs(ROLES) do rd.INVENTORY_TYPES[#rd.INVENTORY_TYPES + 1] = t end
 table.sort(rd.INVENTORY_TYPES)
+-- electric inserters hold nothing, so only an explicit type reaches the burner ones
+rd.STOCK_TYPES = {}
+for _, t in ipairs(rd.INVENTORY_TYPES) do
+  if t ~= "inserter" then rd.STOCK_TYPES[#rd.STOCK_TYPES + 1] = t end
+end
 
 --- The entity's inventories by kind (input, output, fuel, modules, chest, ...), each merged by item.
 --- Empty kinds are left out. The result is nil when nothing is inside.
@@ -227,9 +234,14 @@ function rd.inventories(e)
   local out
   for _, role in ipairs(roles) do
     local inv = e.get_inventory(role[2])
-    if inv and not inv.is_empty() then
-      out = out or {}
-      out[role[1]] = rd.merge(out[role[1]] or {}, inv)
+    if inv then
+      local contents = inv.get_contents()
+      if contents[1] then
+        out = out or {}
+        local items = out[role[1]]
+        if not items then items = {} out[role[1]] = items end
+        for _, it in ipairs(contents) do items[it.name] = (items[it.name] or 0) + it.count end
+      end
     end
   end
   return out
@@ -302,35 +314,56 @@ function rd.record(e)
   return r
 end
 
+rd.READ_CAP = 2000
+
+local function by_place(p, q)
+  if p.y ~= q.y then return p.y < q.y end
+  if p.x ~= q.x then return p.x < q.x end
+  return p.u < q.u
+end
+
 --- Entities in c.area for c.force, ghosts included, sorted by y then x so a page stays put between calls.
---- filter: names and types (lists, from nameset and typeset), ghosts (true: only ghosts, false: none, nil: both).
+--- filter: names and types (lists, from nameset and typeset), ghosts (true: only ghosts, false: none, nil: both),
+--- unsorted (skip the sort and the position reads), cap (default READ_CAP), hint (for the error).
 --- Ghosts match names and types by what they stand for.
+--- The engine stops one past the cap: more than the cap returns nil and an error table, so no call reads more than that.
 function rd.find(c, filter)
   filter = filter or {}
-  local query = {area = c.area, force = c.force}
+  local cap = filter.cap or rd.READ_CAP
   local names, types, ghosts = filter.names, filter.types, filter.ghosts
-  local out = {}
+  local plain, ghost = {}, {}
   if ghosts ~= true then
-    query.name, query.type = names, types
-    for _, e in pairs(c.s.find_entities_filtered(query)) do out[#out + 1] = e end
+    plain = c.s.find_entities_filtered{area = c.area, force = c.force, name = names, type = types, limit = cap + 1}
   end
   if ghosts ~= false then
-    local name_set, type_set = {}, {}
-    for _, n in ipairs(names or {}) do name_set[n] = true end
-    for _, t in ipairs(types or {}) do type_set[t] = true end
-    query.name, query.type = "entity-ghost", nil
-    for _, e in pairs(c.s.find_entities_filtered(query)) do
-      if (not names or name_set[e.ghost_name]) and (not types or type_set[e.ghost_type]) then
-        out[#out + 1] = e
+    ghost = c.s.find_entities_filtered{area = c.area, force = c.force, name = "entity-ghost", limit = cap + 1}
+  end
+  if #plain + #ghost > cap then
+    return nil, rd.fail(string.format("more than %d entities match in that area; a call reads at most %d", cap, cap),
+      filter.hint or "narrow the area, or add name or type")
+  end
+  local name_set, type_set = {}, {}
+  for _, n in ipairs(names or {}) do name_set[n] = true end
+  for _, t in ipairs(types or {}) do type_set[t] = true end
+  local found = {}
+  local function take(list, ghost_only)
+    for _, e in pairs(list) do
+      local keep = not ghost_only or
+        ((not names or name_set[e.ghost_name]) and (not types or type_set[e.ghost_type]))
+      if keep and filter.unsorted then
+        found[#found + 1] = e
+      elseif keep then
+        local p = e.position
+        found[#found + 1] = {e = e, x = p.x, y = p.y, u = e.unit_number or 0}
       end
     end
   end
-  table.sort(out, function(a, b)
-    local pa, pb = a.position, b.position
-    if pa.y ~= pb.y then return pa.y < pb.y end
-    if pa.x ~= pb.x then return pa.x < pb.x end
-    return (a.unit_number or 0) < (b.unit_number or 0)
-  end)
+  take(plain, false)
+  take(ghost, true)
+  if filter.unsorted then return found end
+  table.sort(found, by_place)
+  local out = {}
+  for i, f in ipairs(found) do out[i] = f.e end
   return out
 end
 

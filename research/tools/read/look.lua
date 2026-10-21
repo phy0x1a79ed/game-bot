@@ -2,7 +2,7 @@
 --- kind: call
 --- effect: read
 --- summary: entities in an area as short records, filtered by name, type or ghost; count = true tallies names only
---- args: x0, y0, x1, y1 (numbers); name, type (a string or a list); ghosts (true: only ghosts, false: none); count (bool); limit (default 200, max 1000), offset; surface (default nauvis), force (default player)
+--- args: x0, y0, x1, y1 (numbers); name, type (a string or a list); ghosts (true: only ghosts, false: none); count (bool); limit (default 200, max 300), offset; surface (default nauvis), force (default player)
 --- returns: {entities = {{name, x, y, dir, recipe, status, ghost, deconstruct, pickup = {x, y}, drop = {x, y}, io}, ...}, total, more, next} or {counts = {name = n}, ghost_counts, total}; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
@@ -26,7 +26,13 @@ if a.ghosts ~= nil then
   filter.ghosts = a.ghosts
 end
 
-local found = rd.find(c, filter)
+if a.count then
+  filter.unsorted, filter.cap = true, 8000
+else
+  filter.hint = "narrow the area, add name or type, or use count = true"
+end
+local found, cut = rd.find(c, filter)
+if not found then return cut end
 
 if a.count then
   local counts, ghost_counts = {}, {}

@@ -2,7 +2,7 @@
 --- kind: call
 --- effect: read
 --- summary: machines in an area grouped by status; each one that is not working names its recipe and the inputs it lacks
---- args: x0, y0, x1, y1 (numbers); name, type (string or list; default: assemblers, furnaces, labs, drills, boilers, generators, reactors); working (bool: list working machines too); limit (default 200, max 1000), offset; surface, force
+--- args: x0, y0, x1, y1 (numbers); name, type (string or list; default: assemblers, furnaces, labs, drills, boilers, generators, reactors); working (bool: list working machines too); limit (default 200, max 300), offset; surface, force
 --- returns: {counts = {status = n}, groups = {status = {{name, x, y, recipe, missing = {item}, output = {item = n}}, ...}}, total, more, next}; total counts the listed machines; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
@@ -49,33 +49,39 @@ local function lacking(e)
   return out
 end
 
+local found, cut = rd.find(c, filter)
+if not found then return cut end
+
 local counts, listed = {}, {}
-for _, e in ipairs(rd.find(c, filter)) do
+for i, e in ipairs(found) do
   local st = rd.status(e) or "unknown"
   counts[st] = (counts[st] or 0) + 1
-  if st ~= "working" or a.working then
-    local r = rd.record(e)
-    r.status, r.dir = nil, nil
-    if st == "no_fuel" then
-      r.missing = {"fuel"}
-    elseif st == "full_output" then
-      local inv = e.get_output_inventory()
-      if inv then r.output = rd.merge({}, inv) end
-    else
-      local m = lacking(e)
-      if #m > 0 then r.missing = m end
-    end
-    listed[#listed + 1] = {status = st, record = r}
-  end
+  if st ~= "working" or a.working then listed[#listed + 1] = {status = st, e = e, i = i} end
 end
-table.sort(listed, function(x, y) return x.status < y.status end)
+table.sort(listed, function(x, y)
+  if x.status ~= y.status then return x.status < y.status end
+  return x.i < y.i
+end)
 
+-- records are built for the page only
 local page = rd.page({}, "list", listed, c)
 local groups = {}
 for _, item in ipairs(page.list) do
-  local g = groups[item.status]
-  if not g then g = {} groups[item.status] = g end
-  g[#g + 1] = item.record
+  local e, st = item.e, item.status
+  local r = rd.record(e)
+  r.status, r.dir = nil, nil
+  if st == "no_fuel" then
+    r.missing = {"fuel"}
+  elseif st == "full_output" then
+    local inv = e.get_output_inventory()
+    if inv then r.output = rd.merge({}, inv) end
+  else
+    local m = lacking(e)
+    if #m > 0 then r.missing = m end
+  end
+  local g = groups[st]
+  if not g then g = {} groups[st] = g end
+  g[#g + 1] = r
 end
 page.list = nil
 page.counts, page.groups = counts, groups

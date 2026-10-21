@@ -5,6 +5,7 @@ replies with ground truth that plain Lua reads from the game. A call must leave 
 """
 
 import json
+import re
 
 from .. import camera, tools
 from ..lab import SbxError
@@ -50,17 +51,29 @@ def call(lab, tool, /, **args):
     return reply["r"], len(out)
 
 
+def pages(lab, tool, /, **args):
+    """Every page of a paged tool at the largest page size. Returns (replies, total bytes)."""
+    replies, size, offset = [], 0, 0
+    while True:
+        r, n = call(lab, tool, limit=300, offset=offset, **args)
+        replies.append(r)
+        size += n
+        if not r.get("more"):
+            return replies, size
+        offset = r["next"]
+
+
 def stamp(lab, surface="nauvis"):
     return jlua(lab, STAMP % surface)
 
 
 def sync(lab, *names):
-    """Define the named tools and the libs they use. False when the lab's game-bot-control has no tool registry."""
+    """Define the named tools and the libs they use. Returns None, or the version of a game-bot-control with no tool registry."""
     version = lab.lua('rcon.print(script.active_mods["game-bot-control"])').strip()
     if tuple(int(p) for p in version.split(".")) < MIN_MOD:
-        return False
+        return version
     tools.sync(lab, names=list(names), root=tools.TOOLS)
-    return True
+    return None
 
 
 def case(tool_names, surface="nauvis", build=None):
@@ -71,8 +84,9 @@ def case(tool_names, surface="nauvis", build=None):
     """
     def wrap(check):
         def run(lab):
-            if not sync(lab, *tool_names):
-                return Result(True, "skipped: game-bot-control has no tool registry; set FXLAB_GBC_MOD")
+            old = sync(lab, *tool_names)
+            if old:
+                return Result(False, f"game-bot-control {old} has no tool registry; set FXLAB_GBC_MOD")
             if build:
                 build(lab)
             before, bad, data = stamp(lab, surface), [], {}
@@ -133,17 +147,17 @@ def tools_read_look(lab, bad, data):
     counted, size = call(lab, "look", count=True, **LOOK_AREA)
     same(bad, "counts per name", counted["counts"], truth["names"])
     same(bad, "total with ghosts", counted["total"], total + truth["ghosts"])
-    full, size_full = call(lab, "look", limit=1000, **LOOK_AREA)
-    ents = lst(full["entities"])
+    full, size_full = pages(lab, "look", **LOOK_AREA)
+    ents = [e for r in full for e in lst(r["entities"])]
     same(bad, "full list length", len(ents), total + truth["ghosts"])
-    same(bad, "full list has no cut", full.get("more"), None)
+    same(bad, "pages", [r["total"] for r in full], [total + truth["ghosts"]] * len(full))
     first, _ = call(lab, "look", limit=7, **LOOK_AREA)
     second, _ = call(lab, "look", limit=7, offset=7, **LOOK_AREA)
     same(bad, "first page cut", (first.get("more"), first.get("next"), first["total"]), (True, 7, total + truth["ghosts"]))
     same(bad, "pages follow the full list", lst(first["entities"]) + lst(second["entities"]), ents[:14])
     only, _ = call(lab, "look", ghosts=False, count=True, **LOOK_AREA)
     same(bad, "ghosts = false", only["total"], total)
-    kinds, _ = call(lab, "look", type="inserter", limit=1000, **LOOK_AREA)
+    kinds, _ = call(lab, "look", type="inserter", limit=300, **LOOK_AREA)
     kinds_of = sorted({row[0] for row in truth["inserters"]})
     named, _ = call(lab, "look", name=kinds_of, count=True, **LOOK_AREA)
     same(bad, "type = inserter count", kinds["total"], len(truth["inserters"]))
@@ -157,14 +171,14 @@ def tools_read_look(lab, bad, data):
     gx, gy = truth["ghost"]
     box = dict(x0=gx - 12, y0=gy - 12, x1=gx + 12, y1=gy + 12)
     ghost_truth = jlua(lab, LOOK_TRUTH % box)
-    ghosts, _ = call(lab, "look", ghosts=True, limit=1000, **box)
+    ghosts, _ = call(lab, "look", ghosts=True, limit=300, **box)
     same(bad, "ghosts = true", (ghosts["total"], all(e.get("ghost") for e in lst(ghosts["entities"]))),
          (ghost_truth["ghosts"], True))
     if not ghost_truth["ghosts"]:
         bad.append("the ghost box held no ghost")
-    data["bytes_full_60x50"] = size_full
+    data["bytes_60x50_in_pages"] = size_full
     data["bytes_count"] = size
-    return f"{total + truth['ghosts']} entities, {len(truth['inserters'])} inserters; full list {size_full} B, count {size} B"
+    return f"{total + truth['ghosts']} entities, {len(truth['inserters'])} inserters; all pages {size_full} B, count {size} B"
 
 
 # -- inventory --
@@ -238,7 +252,7 @@ def tools_read_inventory(lab, bad, data):
         truth = jlua(lab, INV_TRUTH % area)
         total, size = call(lab, "inventory", sum=True, **area)
         same(bad, f"totals {area}", total["totals"], truth["totals"])
-        listed, size_rows = call(lab, "inventory", limit=1000, **area)
+        listed, size_rows = call(lab, "inventory", limit=300, **area)
         same(bad, f"rows {area}", listed["total"], truth["rows"])
         same(bad, f"sum of rows {area}", row_total(listed["entities"]), sum(truth["totals"].values()))
         with_belts, _ = call(lab, "inventory", sum=True, belts=True, **area)
@@ -318,18 +332,27 @@ rcon.print(helpers.table_to_json{bad = bad, checked = checked})
 """
 
 
+def merged_groups(replies):
+    out = {}
+    for r in replies:
+        for status, records in r["groups"].items():
+            out.setdefault(status, []).extend(lst(records))
+    return out
+
+
 @fixture(RUN4, tags=TAGS, camera=True)
 @case(["status"])
 def tools_read_status(lab, bad, data):
     """status counts every machine by status and names the recipe and the short inputs of each one that is idle."""
     truth = jlua(lab, STATUS_TRUTH % dict(BASE, types=json.dumps(MACHINES)))
-    r, size = call(lab, "status", limit=1000, working=True, **BASE)
-    same(bad, "counts per status", r["counts"], truth)
-    groups = r["groups"]
+    every, size = pages(lab, "status", working=True, **BASE)
+    same(bad, "counts per status", every[0]["counts"], truth)
+    groups = merged_groups(every)
     listed = sum(len(v) for v in groups.values())
-    same(bad, "listed machines", (r["total"], listed), (sum(truth.values()), sum(truth.values())))
+    same(bad, "listed machines", (every[0]["total"], listed), (sum(truth.values()), sum(truth.values())))
     same(bad, "working group", len(groups.get("working", [])), truth.get("working", 0))
-    idle, size_idle = call(lab, "status", limit=1000, **BASE)
+    idle_pages, size_idle = pages(lab, "status", **BASE)
+    idle = {"total": idle_pages[0]["total"], "groups": merged_groups(idle_pages)}
     same(bad, "idle listing leaves out working", "working" in idle["groups"], False)
     records = [rec for group in idle["groups"].values() for rec in group if "missing" in rec]
     check = jlua(lab, MISSING_CHECK % json.dumps(records))
@@ -343,7 +366,8 @@ def tools_read_status(lab, bad, data):
     only, _ = call(lab, "status", type="lab", **BASE)
     same(bad, "type filter", only["counts"], jlua(lab, STATUS_TRUTH % dict(BASE, types='["lab"]')))
     data.update(bytes_all=size, bytes_idle=size_idle, idle=idle["total"], names_missing=check["checked"])
-    return f"{sum(truth.values())} machines, {idle['total']} idle, {check['checked']} with missing inputs checked; idle list {size_idle} B"
+    return (f"{sum(truth.values())} machines, {idle['total']} idle, {check['checked']} with missing inputs checked; "
+            f"idle list {size_idle} B in {len(idle_pages)} pages")
 
 
 # -- power --
@@ -353,11 +377,14 @@ local s = game.surfaces.nauvis
 local a = {{%(x0)s, %(y0)s}, {%(x1)s, %(y1)s}}
 local kw, engines, poles, weak = 0, 0, 0, 0
 local ST = {} for k, v in pairs(defines.entity_status) do ST[v] = k end
+local MACHINES = {}
+for _, t in ipairs{"assembling-machine", "furnace", "lab", "mining-drill", "roboport", "radar", "pump",
+    "beacon", "electric-turret", "lamp", "rocket-silo", "agricultural-tower"} do MACHINES[t] = true end
 for _, e in pairs(s.find_entities_filtered{area = a, force = "player"}) do
   if e.type == "generator" then kw = kw + e.energy_generated_last_tick * 60 / 1000 engines = engines + 1 end
   if e.type == "electric-pole" then poles = poles + 1 end
   local st = e.status and ST[e.status]
-  if st == "no_power" or st == "low_power" then weak = weak + 1 end
+  if MACHINES[e.type] and (st == "no_power" or st == "low_power") then weak = weak + 1 end
 end
 local boilers, fuel, mj, working = 0, {}, 0, 0
 for _, e in pairs(s.find_entities_filtered{area = a, force = "player", type = "boiler"}) do
@@ -411,7 +438,7 @@ def tools_read_power(lab, bad, data):
 # -- fixtures that build their own world, on a flat concrete surface called rk --
 
 ARENA = """
-local s = game.surfaces.rk or game.create_surface("rk", {width = 128, height = 128, peaceful_mode = true, no_enemies_mode = true})
+local s = game.surfaces["%(surface)s"] or game.create_surface("%(surface)s", {width = 128, height = 128, peaceful_mode = true, no_enemies_mode = true})
 s.request_to_generate_chunks({0, 0}, 2)
 s.force_generate_chunk_requests()
 local tiles = {}
@@ -429,9 +456,9 @@ end
 """
 
 
-def arena(lab, build=""):
-    """Make the flat surface rk and run `build` Lua on it, with `s`, `D` and `mk{...}` in scope."""
-    lab.lua(ARENA + build)
+def arena(lab, build="", surface="rk"):
+    """Make the flat surface (rk unless named) and run `build` Lua on it, with `s`, `D` and `mk{...}` in scope."""
+    lab.lua((ARENA % {"surface": surface}) + build)
 
 
 # -- belt_trace --
@@ -820,8 +847,24 @@ end
 """
 
 
+FIELD = """
+for x = -40, 39 do for y = -40, 23 do mk{name = "transport-belt", position = {x + 0.5, y + 0.5}, direction = D.east} end end
+mk{name = "heat-exchanger", position = {0.5, 30}, direction = D.north}
+"""
+
+FORK = """
+mk{name = "splitter", position = {0.5, 36}, direction = D.east}
+for x = 1, 2 do for y = 35, 36 do mk{name = "transport-belt", position = {x + 0.5, y + 0.5}, direction = D.east} end end
+"""
+
+
+def crowd(lab):
+    arena(lab, CROWD + FORK)
+    arena(lab, FIELD, surface="rk2")
+
+
 @fixture("create", tags=TAGS, camera=True)
-@case(ALL, surface="rk", build=lambda lab: arena(lab, CROWD))
+@case(ALL, surface="rk", build=crowd)
 def tools_read_rules(lab, bad, data):
     """Every tool caps its list, rejects an unknown name, a bad area and a stray argument with an error, never a Lua error."""
     pipes = dict(x0=-40, y0=-32, x1=40, y1=-22, surface="rk")
@@ -829,8 +872,11 @@ def tools_read_rules(lab, bad, data):
     same(bad, "default cap", (len(lst(first["entities"])), first["total"], first.get("more"), first.get("next")), (200, 300, True, 200))
     rest, _ = call(lab, "look", offset=200, **pipes)
     same(bad, "second page", (len(lst(rest["entities"])), rest["total"], rest.get("more")), (100, 300, None))
-    everything, _ = call(lab, "look", limit=1000, **pipes)
-    same(bad, "limit 1000", (len(lst(everything["entities"])), everything.get("more")), (300, None))
+    everything, _ = call(lab, "look", limit=300, **pipes)
+    same(bad, "limit 300", (len(lst(everything["entities"])), everything.get("more")), (300, None))
+    big, _ = call(lab, "look", limit=301, **pipes)
+    if not (big.get("error") and big.get("hint")):
+        bad.append("a limit over 300 returned no error and a hint")
     counted, _ = call(lab, "look", count=True, **pipes)
     same(bad, "count ignores the cap", counted["counts"], {"pipe": 300})
     chests, _ = call(lab, "inventory", x0=-40, y0=9, x1=40, y1=17, surface="rk")
@@ -858,7 +904,90 @@ def tools_read_rules(lab, bad, data):
     hint = call(lab, "rate", items=["iron-platee"], surface="rk")[0].get("hint", "")
     if "iron-plate" not in hint:
         bad.append(f"the hint for a near-miss item name does not suggest it: {hint!r}")
+    for key in ("surface", "force"):
+        r, _ = call(lab, "look", x0=0, y0=0, x1=1, y1=1, **{key: {"a": 1}})
+        if not (r.get("error") and r.get("hint")):
+            bad.append(f"a table as {key} did not return an error and a hint: {str(r)[:80]}")
+    field = dict(x0=-40, y0=-40, x1=40, y1=24, surface="rk2")
+    over, _ = call(lab, "look", **field)
+    if not (over.get("error") and "count" in over.get("hint", "")):
+        bad.append(f"an area over the read cap did not point to count: {str(over)[:100]}")
+    counted, _ = call(lab, "look", count=True, **field)
+    same(bad, "count over the read cap", counted["counts"], {"transport-belt": 5120})
+    over_inv, _ = call(lab, "inventory", belts=True, **field)
+    if not over_inv.get("error"):
+        bad.append("inventory with belts over the read cap returned no error")
+    heat, _ = call(lab, "power", x0=-5, y0=26, x1=5, y1=34, surface="rk2")
+    same(bad, "a heat exchanger is not a fuelled boiler", (lst(heat.get("networks")), "boilers" in heat, "error" in heat), ([], False, False))
+    fork, _ = call(lab, "belt_trace", x=0.5, y=35.5, limit=1, surface="rk")
+    same(bad, "cap at a splitter", (fork["tiles"], [len(lst(fork["segments"])), [e["why"] for e in lst(fork["ends"])]]),
+         (1, [1, ["cap", "cap"]]))
     mars, _ = call(lab, "look", x0=0, y0=0, x1=1, y1=1, surface="mars")
     if "nauvis" not in mars.get("hint", ""):
         bad.append(f"an unknown surface does not list the surfaces: {mars}")
     return "caps, names, areas and arguments all answer with an error and a hint"
+
+
+# -- engine time --
+
+BUDGET_MS = 20.0
+_DURATION = {"s": 1000.0, "ms": 1.0, "us": 1e-3, "µs": 1e-3, "ns": 1e-6}
+
+
+def timed(lab, tool, /, **args):
+    """Run a tool once in one Lua call under a profiler. Returns (reply, engine milliseconds, reply bytes).
+
+    A LuaProfiler cannot be read as a number, so it is printed as a localised string and parsed.
+    """
+    src = json.dumps({"name": tool, "args": args})
+    out = lab.lua(f'local a = helpers.json_to_table([==[{src}]==]) local p = helpers.create_profiler() '
+                  'local rep = remote.call("game_bot", "tool_call", a) p.stop() '
+                  'rcon.print(helpers.table_to_json(rep)) rcon.print({"", "T\\t", p})')
+    first, _, rest = out.partition("\n")
+    reply = json.loads(first)
+    if not reply.get("ok"):
+        raise SbxError(reply.get("error", "error"), reply.get("detail", ""))
+    value, unit = re.search(r"Duration: ([\d.]+)\s*(\w+)?", rest).groups()
+    return reply["r"], float(value) * _DURATION.get(unit, 1.0), len(first)
+
+
+@fixture(RUN4, tags=TAGS, camera=True)
+@case(["look", "status", "inventory", "power", "fluid", "resources", "belt_trace", "rate", "network", "ascii_map"])
+def tools_read_budget(lab, bad, data):
+    """Every tool, called over the whole run4 base at its caps, answers or refuses with a hint within 20 ms of engine time (best of three)."""
+    area = lab.sbx("slice_area_of_base", pad=0)["area"]
+    base = dict(x0=area[0][0], y0=area[0][1], x1=area[1][0], y1=area[1][1])
+    belt = dict(x=108.5, y=-21.5)
+    runs = [
+        ("look", dict(base)), ("look count", dict(base, count=True)), ("look inserters", dict(base, type="inserter", limit=300)),
+        ("look belts", dict(base, type="transport-belt", limit=300)),
+        ("status", dict(base)), ("status all", dict(base, working=True, limit=300)),
+        ("inventory", dict(base)), ("inventory sum", dict(base, sum=True)), ("inventory belts", dict(base, belts=True, sum=True)),
+        ("power", dict(base)), ("fluid", dict(base)), ("fluid all", dict(base, limit=300)),
+        ("resources", dict(base)), ("resources all", dict(base, limit=300)),
+        ("belt_trace", dict(belt, limit=500, up=True, taps=True)), ("belt_trace default", dict(belt)),
+        ("rate", dict(items=["iron-plate", "copper-plate", "coal", "crude-oil", "petroleum-gas"])),
+        ("network", dict(x=100, y=0)), ("ascii_map", dict(x0=100, y0=-40, x1=164, y1=24)),
+        # windows that hold the most, where the call is answered and not refused
+        ("resources window", dict(x0=256, y0=-160, x1=512, y1=96)), ("inventory window", dict(x0=448, y0=-224, x1=640, y1=-32)),
+        ("look window", dict(x0=-128, y0=-160, x1=0, y1=-32, limit=300)), ("status window", dict(x0=0, y0=-160, x1=256, y1=96)),
+        ("fluid window", dict(x0=0, y0=-160, x1=256, y1=96)), ("power window", dict(x0=0, y0=-160, x1=256, y1=96)),
+    ]
+    times, worst = {}, 0.0
+    for label, args in runs:
+        tool = label.split()[0]
+        if tool == "look" and "count" in label:
+            args = dict(args, count=True)
+        runs3 = [timed(lab, tool, **args) for _ in range(3)]
+        reply, _, size = runs3[0]
+        ms = min(t for _, t, _ in runs3)
+        times[label] = {"ms": round(ms, 2), "max_ms": round(max(t for _, t, _ in runs3), 2), "bytes": size,
+                        "refused": bool(reply.get("error"))}
+        worst = max(worst, ms)
+        if ms > BUDGET_MS:
+            bad.append(f"{label} took {ms:.1f} ms of engine time at best of 3, over {BUDGET_MS:.0f}")
+        if reply.get("error") and not reply.get("hint"):
+            bad.append(f"{label} refused without a hint: {reply['error']}")
+    data["times"] = times
+    shown = "; ".join(f"{k} {v['ms']} ms{' (refused)' if v['refused'] else ''}" for k, v in times.items())
+    return f"worst {worst:.1f} ms. {shown}"

@@ -2,8 +2,8 @@
 --- kind: call
 --- effect: read
 --- summary: electric networks that touch an area: production, demand, satisfaction, accumulator charge, and the fuel left in boilers
---- args: x0, y0, x1, y1 (numbers); limit (networks, default 200, max 1000), offset; surface, force (default player)
---- returns: {networks = {{id, produced_kw, demand_kw, capacity_kw, satisfaction, accumulators = {charge, energy_mj, capacity_mj}, poles, generators = {name = n}, no_power, low_power}, ...}, unconnected = {n, examples = {{name, x, y}, ...}}, boilers = {n, working, status = {status = n}, fuel = {item = n}, fuel_mj, minutes_left, empty = {{x, y}, ...}}, total, more, next}; produced_kw is what was delivered last tick, capacity_kw what the producers could offer, satisfaction 0 to 1; no_power and low_power count entities in the area that sit on the network, unconnected those with no network at all; {error, hint} on bad args
+--- args: x0, y0, x1, y1 (numbers); limit (networks, default 200, max 300), offset; surface, force (default player)
+--- returns: {networks = {{id, produced_kw, demand_kw, capacity_kw, satisfaction, accumulators = {charge, energy_mj, capacity_mj}, poles, generators = {name = n}, no_power, low_power}, ...}, unconnected = {n, examples = {{name, x, y}, ...}}, boilers = {n, working, status = {status = n}, fuel = {item = n}, fuel_mj, minutes_left, empty = {{x, y}, ...}}, total, more, next}; produced_kw is what was delivered last tick, capacity_kw what the producers could offer, satisfaction 0 to 1; no_power and low_power count machines (assemblers, furnaces, labs, drills, roboports, radars, pumps, beacons, turrets, lamps) in the area that sit on the network, unconnected those with no network at all; {error, hint} on bad args
 --- uses: rd
 local rd = use("rd")
 local a = ...
@@ -24,23 +24,35 @@ local function net_of(e)
 end
 
 local boilers, loose = {}, {n = 0, examples = {}}
-for _, e in ipairs(rd.find(c, {ghosts = false})) do
+local structure, cut = rd.find(c, {types = {"electric-pole", "generator", "solar-panel", "accumulator"}, ghosts = false,
+  unsorted = true})
+if not structure then return cut end
+for _, e in ipairs(structure) do
   local n = net_of(e)
-  if not n and rd.status(e) == "no_power" and e.electric_network_id == nil and e.prototype.electric_energy_source_prototype then
+  if n and e.type == "electric-pole" then n.poles = n.poles + 1 end
+  if n and e.type ~= "electric-pole" then n.generators[e.name] = (n.generators[e.name] or 0) + 1 end
+end
+
+-- machines short of power: on a network they count there, and off every network they are listed as unconnected
+local consumers
+consumers, cut = rd.find(c, {types = {"assembling-machine", "furnace", "lab", "mining-drill", "roboport",
+  "radar", "pump", "beacon", "electric-turret", "lamp", "rocket-silo", "agricultural-tower"}, ghosts = false, unsorted = true})
+if not consumers then return cut end
+for _, e in ipairs(consumers) do
+  local st = rd.status(e)
+  local n = (st == "no_power" or st == "low_power") and net_of(e)
+  if n then
+    if st == "no_power" then n.no_power = n.no_power + 1 else n.low_power = n.low_power + 1 end
+  elseif st == "no_power" and e.electric_network_id == nil then
     loose.n = loose.n + 1
     if #loose.examples < 10 then
       loose.examples[#loose.examples + 1] = {name = e.name, x = rd.r2(e.position.x), y = rd.r2(e.position.y)}
     end
   end
-  if n then
-    if e.type == "electric-pole" then n.poles = n.poles + 1 end
-    if e.type == "generator" or e.type == "solar-panel" or e.type == "accumulator" then
-      n.generators[e.name] = (n.generators[e.name] or 0) + 1
-    end
-    local st = rd.status(e)
-    if st == "no_power" then n.no_power = n.no_power + 1 elseif st == "low_power" then n.low_power = n.low_power + 1 end
-  end
-  if e.type == "boiler" then boilers[#boilers + 1] = e end
+end
+
+for _, e in ipairs(rd.find(c, {types = {"boiler"}, ghosts = false, unsorted = true}) or {}) do
+  if e.burner then boilers[#boilers + 1] = e end
 end
 
 table.sort(order, function(p, q) return p.id < q.id end)
