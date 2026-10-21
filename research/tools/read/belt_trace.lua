@@ -26,8 +26,14 @@ if not start then
       or "no belt within 6 tiles")
 end
 
+-- branches in a fixed order, by position, so two calls list a splitter's outputs the same way
 local function nexts(e, fwd)
-  local n = fwd and e.belt_neighbours.outputs or e.belt_neighbours.inputs
+  local n = {}
+  for i, b in ipairs(fwd and e.belt_neighbours.outputs or e.belt_neighbours.inputs) do n[i] = b end
+  table.sort(n, function(p, q)
+    if p.position.x ~= q.position.x then return p.position.x < q.position.x end
+    return p.position.y < q.position.y
+  end)
   return n
 end
 
@@ -142,6 +148,16 @@ local function tiles(e, add)
   end
 end
 
+local IGNORED = {resource = true, ["item-entity"] = true, corpse = true, character = true}
+
+-- the entity standing on a world position: an inserter's target is only resolved after its first tick
+local function entity_at(pos)
+  for _, o in pairs(s.find_entities_filtered{position = pos}) do
+    if not IGNORED[o.type] then return o end
+  end
+  return nil
+end
+
 local function find_taps(segs)
   local owner = {}
   for _, seg in ipairs(segs) do
@@ -152,7 +168,7 @@ local function find_taps(segs)
   local taps, seen = {}, {}
   local function other(t)
     if not t then return nil end
-    local r = {name = t.name, x = rd.r2(t.position.x), y = rd.r2(t.position.y)}
+    local r = {name = t.type == "entity-ghost" and t.ghost_name or t.name, x = rd.r2(t.position.x), y = rd.r2(t.position.y)}
     if t.type == "assembling-machine" or t.type == "furnace" then
       local recipe = t.get_recipe()
       if recipe then r.recipe = recipe.name end
@@ -168,12 +184,12 @@ local function find_taps(segs)
       local pk, dp = ins.pickup_position, ins.drop_position
       local from = owner[math.floor(pk.x) .. "," .. math.floor(pk.y)]
       local to = owner[math.floor(dp.x) .. "," .. math.floor(dp.y)]
-      for _, role in ipairs{{"pickup", from, ins.drop_target}, {"drop", to, ins.pickup_target}} do
+      for _, role in ipairs{{"pickup", from, dp}, {"drop", to, pk}} do
         local key = ins.unit_number .. role[1]
         if role[2] and not seen[key] then
           seen[key] = true
           taps[#taps + 1] = {name = ins.name, x = rd.r2(ins.position.x), y = rd.r2(ins.position.y), seg = role[2],
-            role = role[1], other = other(role[3])}
+            role = role[1], other = other(entity_at(role[3]))}
         end
       end
     end

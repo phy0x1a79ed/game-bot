@@ -15,7 +15,7 @@ RUN4 = "run4-closeout+cam"
 MIN_MOD = (0, 6, 1)
 
 STAMP = """
-local s = game.surfaces.nauvis
+local s = game.surfaces["%s"]
 local n, items, decon, ghosts, belt = 0, 0, 0, 0, 0
 for _, e in pairs(s.find_entities_filtered{force = "player"}) do
   n = n + 1
@@ -50,8 +50,8 @@ def call(lab, tool, /, **args):
     return reply["r"], len(out)
 
 
-def stamp(lab):
-    return jlua(lab, STAMP)
+def stamp(lab, surface="nauvis"):
+    return jlua(lab, STAMP % surface)
 
 
 def sync(lab, *names):
@@ -63,19 +63,21 @@ def sync(lab, *names):
     return True
 
 
-def case(tool_names):
+def case(tool_names, surface="nauvis", build=None):
     """Wrap a check function: sync the tools, run it, and add the shared checks.
 
-    The check takes (lab, bad, data) and appends a sentence to `bad` for every failed expectation.
+    `build(lab)` sets the world up first. `surface` is the one the world check reads. The check takes (lab, bad, data) and appends a sentence to `bad` for every failed expectation.
     The world must be unchanged afterwards, the camera still connected and no desync logged.
     """
     def wrap(check):
         def run(lab):
             if not sync(lab, *tool_names):
                 return Result(True, "skipped: game-bot-control has no tool registry; set FXLAB_GBC_MOD")
-            before, bad, data = stamp(lab), [], {}
+            if build:
+                build(lab)
+            before, bad, data = stamp(lab, surface), [], {}
             detail = check(lab, bad, data)
-            after = stamp(lab)
+            after = stamp(lab, surface)
             if before != after:
                 bad.append(f"the world changed: {before} -> {after}")
             lab.advance(120)
@@ -120,10 +122,6 @@ end
 local g = s.find_entities_filtered{name = "entity-ghost", force = "player", limit = 1}[1]
 rcon.print(helpers.table_to_json{names = names, ghosts = ghosts, inserters = ins, ghost = g and {g.position.x, g.position.y}})
 """
-
-
-def near(a, b, tol=0.011):
-    return abs(a - b) <= tol
 
 
 @fixture(RUN4, tags=TAGS, camera=True)
@@ -408,3 +406,459 @@ def tools_read_power(lab, bad, data):
     same(bad, "an area without poles", (lst(none["networks"]), none["total"], "boilers" in none), ([], 0, False))
     data.update(bytes_base=size, kw=truth["kw"], boilers=truth["boilers"])
     return f"{len(nets)} network, {produced:.0f} kW; {truth['boilers']} boilers with {truth['mj']:.0f} MJ; {size} B"
+
+
+# -- fixtures that build their own world, on a flat concrete surface called rk --
+
+ARENA = """
+local s = game.surfaces.rk or game.create_surface("rk", {width = 128, height = 128, peaceful_mode = true, no_enemies_mode = true})
+s.request_to_generate_chunks({0, 0}, 2)
+s.force_generate_chunk_requests()
+local tiles = {}
+for x = -40, 39 do for y = -40, 39 do tiles[#tiles + 1] = {name = "refined-concrete", position = {x, y}} end end
+s.set_tiles(tiles)
+for _, e in pairs(s.find_entities_filtered{}) do e.destroy() end
+s.always_day = true
+local D = defines.direction
+local function mk(t)
+  t.force = t.force or "player"
+  local e = s.create_entity(t)
+  assert(e, "create failed: " .. t.name .. " at " .. serpent.line(t.position))
+  return e
+end
+"""
+
+
+def arena(lab, build=""):
+    """Make the flat surface rk and run `build` Lua on it, with `s`, `D` and `mk{...}` in scope."""
+    lab.lua(ARENA + build)
+
+
+# -- belt_trace --
+
+# east along y 0.5, turn south at x -0.5, an underground pair, a splitter, two branches, and a separate ring
+BELTS = """
+local function put(name, x, y, d) return mk{name = name, position = {x, y}, direction = d} end
+for x = -10.5, -1.5 do put("transport-belt", x, 0.5, D.east) end
+for y = 0.5, 4.5 do put("transport-belt", -0.5, y, D.south) end
+put("underground-belt", -0.5, 5.5, D.south)
+mk{name = "underground-belt", position = {-0.5, 9.5}, direction = D.south, type = "output"}
+put("transport-belt", -0.5, 10.5, D.south)
+mk{name = "splitter", position = {0, 11.5}, direction = D.south}
+for y = 12.5, 15.5 do put("transport-belt", -0.5, y, D.south) end
+mk{name = "iron-chest", position = {-0.5, 16.5}}
+put("transport-belt", 0.5, 12.5, D.south)
+put("transport-belt", 0.5, 13.5, D.south)
+for x = 0.5, 4.5 do put("transport-belt", x, 14.5, D.east) end
+put("transport-belt", 10.5, 0.5, D.east)
+put("transport-belt", 11.5, 0.5, D.south)
+put("transport-belt", 11.5, 1.5, D.west)
+put("transport-belt", 10.5, 1.5, D.north)
+mk{name = "iron-chest", position = {-5.5, -1.5}}
+mk{name = "inserter", position = {-5.5, -0.5}, direction = D.north}
+mk{name = "inserter", position = {-3.5, 1.5}, direction = D.north}
+mk{name = "iron-chest", position = {-3.5, 2.5}}
+-- three iron plates on the left lane and two copper plates on the right lane of every belt of the first run
+local function load(x, y)
+  local b = s.find_entities_filtered{name = "transport-belt", position = {x, y}, radius = 0.1}[1]
+  for k = 0, 2 do assert(b.get_transport_line(1).insert_at(0.15 + 0.25 * k, {name = "iron-plate"})) end
+  for k = 0, 1 do assert(b.get_transport_line(2).insert_at(0.15 + 0.25 * k, {name = "copper-plate"})) end
+end
+for x = -10.5, -1.5 do load(x, 0.5) end
+load(-0.5, 2.5)
+local ug = s.find_entities_filtered{name = "underground-belt", position = {-0.5, 5.5}, radius = 0.1}[1]
+rcon.print(tostring(ug.get_transport_line(3).insert_at_back{name = "coal"}))
+"""
+
+LANES_TRUTH = """
+local s = game.surfaces.rk
+local left, right = {}, {}
+for _, e in pairs(s.find_entities_filtered{area = {{-12, -1}, {5, 17}}, type = {"transport-belt", "underground-belt", "splitter"}}) do
+  for i = 1, e.get_max_transport_line_index() do
+    local into = i % 2 == 1 and left or right
+    for _, c in pairs(e.get_transport_line(i).get_contents()) do into[c.name] = (into[c.name] or 0) + c.count end
+  end
+end
+rcon.print(helpers.table_to_json{left = left, right = right})
+"""
+
+
+def seg_view(seg):
+    return (seg["kind"], seg["from"], seg["to"], seg["n"])
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["belt_trace"], surface="rk", build=lambda lab: arena(lab, BELTS))
+def tools_read_belt_trace(lab, bad, data):
+    """belt_trace follows a belt through a turn, an underground and a splitter, finds the ends, loop and cap."""
+    truth = jlua(lab, LANES_TRUTH)
+    r, size = call(lab, "belt_trace", x=-10.5, y=0.5, surface="rk", taps=True)
+    segs = lst(r["segments"])
+    want = [("belt", [-10.5, 0.5], [-1.5, 0.5], 10), ("belt", [-0.5, 0.5], [-0.5, 4.5], 5),
+            ("underground", [-0.5, 5.5], [-0.5, 9.5], 2), ("belt", [-0.5, 10.5], [-0.5, 10.5], 1),
+            ("splitter", [0, 11.5], [0, 11.5], 1), ("belt", [-0.5, 12.5], [-0.5, 15.5], 4),
+            ("belt", [0.5, 12.5], [0.5, 13.5], 2), ("belt", [0.5, 14.5], [4.5, 14.5], 5)]
+    same(bad, "segments", [seg_view(s) for s in segs], [(k, f, t, n) for k, f, t, n in want])
+    same(bad, "tiles", r["tiles"], 30)
+    parents = {s["id"]: s.get("parent") for s in segs}
+    same(bad, "parents", [parents[s["id"]] for s in segs], [None, 1, 2, 3, 4, 5, 5, 7])
+    same(bad, "directions", [s["dir"] for s in segs], ["east", "south", "south", "south", "south", "south", "south", "east"])
+    ends = sorted((e["seg"], e["why"], e.get("faces")) for e in lst(r["ends"]))
+    same(bad, "ends", ends, [(6, "end", "iron-chest"), (8, "end", None)])
+    same(bad, "lanes", (r["lanes"]["left"], r["lanes"]["right"]), (truth["left"], truth["right"]))
+    same(bad, "first run lanes", (segs[0]["left"], segs[0]["right"]), ({"iron-plate": 30}, {"copper-plate": 20}))
+    taps = sorted((t["role"], t["x"], t["y"], t["seg"], t["other"]["name"]) for t in lst(r.get("taps")))
+    same(bad, "taps", taps, [("drop", -5.5, -0.5, 1, "iron-chest"), ("pickup", -3.5, 1.5, 1, "iron-chest")])
+    up, _ = call(lab, "belt_trace", x=-0.5, y=12.5, surface="rk", up=True)
+    ups = lst(up["up"]["segments"])
+    same(bad, "upstream segments", [seg_view(s) for s in ups],
+         [("splitter", [0, 11.5], [0, 11.5], 1), ("belt", [-0.5, 10.5], [-0.5, 10.5], 1),
+          ("underground", [-0.5, 5.5], [-0.5, 9.5], 2), ("belt", [-0.5, 0.5], [-0.5, 4.5], 5),
+          ("belt", [-10.5, 0.5], [-1.5, 0.5], 10)])
+    same(bad, "upstream ends", [(e["why"], e["x"], e["y"]) for e in lst(up["up"]["ends"])], [("end", -10.5, 0.5)])
+    ring, _ = call(lab, "belt_trace", x=10.5, y=0.5, surface="rk")
+    same(bad, "ring", (ring["tiles"], [e["why"] for e in lst(ring["ends"])]), (4, ["loop"]))
+    cut, _ = call(lab, "belt_trace", x=-10.5, y=0.5, surface="rk", limit=5)
+    same(bad, "cap", (cut["tiles"], [e["why"] for e in lst(cut["ends"])]), (5, ["cap"]))
+    off, _ = call(lab, "belt_trace", x=20.5, y=20.5, surface="rk")
+    if "error" not in off:
+        bad.append("a point with no belt returned no error")
+    data["bytes_trace"] = size
+    return f"{r['tiles']} belts in {len(segs)} segments, {len(lst(r.get('taps')))} taps, reply {size} B"
+
+
+# -- rate --
+
+POWER = """
+local eei = mk{name = "electric-energy-interface", position = {30, 30}}
+eei.power_production = 1e8
+eei.electric_buffer_size = 1e9
+eei.energy = 1e9
+s.create_global_electric_network()
+"""
+
+GEARS = POWER + """
+mk{name = "iron-chest", position = {-6.5, 0.5}}.insert{name = "iron-plate", count = 2000}
+mk{name = "inserter", position = {-5.5, 0.5}, direction = D.west}
+mk{name = "assembling-machine-2", position = {-3.5, 0.5}}.set_recipe("iron-gear-wheel")
+mk{name = "inserter", position = {-1.5, 0.5}, direction = D.west}
+mk{name = "iron-chest", position = {-0.5, 0.5}}
+"""
+
+FINISHED = """
+local a = game.surfaces.rk.find_entities_filtered{name = "assembling-machine-2"}[1]
+rcon.print(a.products_finished)
+"""
+
+
+def gear_line(lab):
+    arena(lab, GEARS)
+    lab.advance(3600)
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["rate"], surface="rk", build=gear_line)
+def tools_read_rate(lab, bad, data):
+    """rate reports the gears one assembler made in a minute, and the plates it used, over 1, 10 and 60 minutes."""
+    made = int(lab.lua(FINISHED))
+    r, size = call(lab, "rate", items=["iron-gear-wheel", "iron-plate", "water"], surface="rk")
+    gears, plates = r["rates"]["iron-gear-wheel"], r["rates"]["iron-plate"]
+    if made < 15:
+        bad.append(f"the assembler finished only {made} gears in a minute")
+    if abs(gears["made"][0] - made) > 3:
+        bad.append(f"gears made per minute {gears['made'][0]}, the assembler finished {made}")
+    if abs(plates["used"][0] - 2 * made) > 6:
+        bad.append(f"plates used per minute {plates['used'][0]}, want about {2 * made}")
+    for window, span in ((1, 10), (2, 60)):
+        want = made / span
+        if abs(gears["made"][window] - want) > max(1.0, 0.15 * want):
+            bad.append(f"gears over {span} minutes: {gears['made'][window]}, want about {want:.1f}")
+    same(bad, "windows", r["windows"], [1, 10, 60])
+    same(bad, "a fluid with no flow", r["rates"]["water"], {"made": [0, 0, 0], "used": [0, 0, 0]})
+    single, _ = call(lab, "rate", items="iron-gear-wheel", surface="rk")
+    same(bad, "one name as a string", single["rates"]["iron-gear-wheel"], gears)
+    data["bytes_3_items"] = size
+    return f"{made} gears in a minute: made {gears['made']}, plates used {plates['used']} per minute; reply {size} B"
+
+
+# -- resources --
+
+ORE = """
+local function patch(name, x0, y0, w, h, amount)
+  for x = x0, x0 + w - 1 do
+    for y = y0, y0 + h - 1 do mk{name = name, position = {x + 0.5, y + 0.5}, amount = amount, force = "neutral"} end
+  end
+end
+patch("iron-ore", 2, 2, 6, 4, 1000)
+patch("iron-ore", -38, 6, 4, 4, 300)
+patch("coal", -10, -12, 3, 3, 500)
+mk{name = "crude-oil", position = {30.5, -30.5}, amount = 300000, force = "neutral"}
+mk{name = "electric-mining-drill", position = {3.5, 3.5}, direction = D.north}
+mk{name = "electric-mining-drill", position = {6.5, 3.5}, direction = D.north}
+mk{name = "electric-mining-drill", position = {-8.5, -10.5}, direction = D.north}
+mk{name = "electric-mining-drill", position = {20.5, 20.5}, direction = D.north}
+"""
+
+
+def patch_view(p):
+    return (p["name"], p["tiles"], p["amount"], p["x0"], p["y0"], p["x1"], p["y1"], p["drills"], p.get("infinite"))
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["resources"], surface="rk", build=lambda lab: arena(lab, ORE))
+def tools_read_resources(lab, bad, data):
+    """resources groups ore tiles into patches, with amounts, tile boxes and the drills that mine each."""
+    area = dict(x0=-40, y0=-40, x1=39, y1=39)
+    r, size = call(lab, "resources", surface="rk", **area)
+    got = [patch_view(p) for p in lst(r["patches"])]
+    want = [("crude-oil", 1, 300000, 30, -31, 31, -30, 0, True), ("iron-ore", 24, 24000, 2, 2, 8, 6, 2, None),
+            ("iron-ore", 16, 4800, -38, 6, -34, 10, 0, None), ("coal", 9, 4500, -10, -12, -7, -9, 1, None)]
+    same(bad, "patches", got, want)
+    same(bad, "total", r["total"], 4)
+    coal, _ = call(lab, "resources", surface="rk", name="coal", **area)
+    same(bad, "name filter", [patch_view(p) for p in lst(coal["patches"])], [want[3]])
+    part, _ = call(lab, "resources", surface="rk", x0=0, y0=0, x1=10, y1=10)
+    same(bad, "area filter", [patch_view(p) for p in lst(part["patches"])], [want[1]])
+    page, _ = call(lab, "resources", surface="rk", limit=1, offset=1, **area)
+    same(bad, "page", ([patch_view(p) for p in lst(page["patches"])], page.get("more"), page.get("next")), ([want[1]], True, 2))
+    wrong, _ = call(lab, "resources", surface="rk", name="iron-chest", **area)
+    if "error" not in wrong:
+        bad.append("a name that is not an ore returned no error")
+    data["bytes_4_patches"] = size
+    return f"{r['total']} patches, reply {size} B"
+
+
+# -- fluid --
+
+PIPES = """
+for x = 0, 9 do mk{name = "pipe", position = {x + 0.5, 0.5}} end
+s.find_entities_filtered{name = "pipe", position = {4.5, 0.5}, radius = 0.1}[1].insert_fluid{name = "water", amount = 500}
+for x = 0, 2 do mk{name = "pipe", position = {x + 0.5, 10.5}} end
+s.find_entities_filtered{name = "pipe", position = {0.5, 10.5}, radius = 0.1}[1].insert_fluid{name = "crude-oil", amount = 150}
+for x = 0, 1 do mk{name = "pipe", position = {x + 0.5, 20.5}} end
+mk{name = "storage-tank", position = {20.5, 20.5}}.insert_fluid{name = "lubricant", amount = 5000}
+"""
+
+
+def segment_view(seg):
+    return (seg.get("fluid"), seg["amount"], seg["capacity"], seg["n"], seg.get("partial"))
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["fluid"], surface="rk", build=lambda lab: arena(lab, PIPES))
+def tools_read_fluid(lab, bad, data):
+    """fluid finds each connected pipe system with its fluid, amount, capacity, members and whether it leaves the area."""
+    area = dict(x0=-5, y0=-5, x1=30, y1=30)
+    r, size = call(lab, "fluid", surface="rk", **area)
+    got = [segment_view(s) for s in lst(r["segments"])]
+    want = [("lubricant", 5000, 25000, 1, None), ("water", 500, 1000, 10, None), ("crude-oil", 150, 300, 3, None),
+            (None, 0, 200, 2, None)]
+    same(bad, "segments", got, want)
+    segs = lst(r["segments"])
+    same(bad, "members", [s["entities"] for s in segs],
+         [{"storage-tank": 1}, {"pipe": 10}, {"pipe": 3}, {"pipe": 2}])
+    same(bad, "ends", [[e["name"] for e in lst(s["ends"])] for s in segs], [["storage-tank"], [], [], []])
+    same(bad, "fill", [s["fill"] for s in segs], [0.2, 0.5, 0.5, 0])
+    half, _ = call(lab, "fluid", surface="rk", x0=-5, y0=-5, x1=5, y1=5)
+    same(bad, "an area cutting a segment", [segment_view(s) for s in lst(half["segments"])], [("water", 500, 1000, 5, True)])
+    box = lst(half["segments"])[0]
+    same(bad, "segment box", (box["x0"], box["y0"], box["x1"], box["y1"]), (0, 0, 10, 1))
+    oil, _ = call(lab, "fluid", surface="rk", fluid="crude-oil", **area)
+    same(bad, "fluid filter", [segment_view(s) for s in lst(oil["segments"])], [want[2]])
+    wrong, _ = call(lab, "fluid", surface="rk", fluid="iron-plate", **area)
+    if "error" not in wrong:
+        bad.append("an item given as a fluid returned no error")
+    data["bytes_4_segments"] = size
+    return f"{r['total']} segments, reply {size} B"
+
+
+# -- network --
+
+PORT = POWER + """
+local rp = mk{name = "roboport", position = {0, 0}}
+rp.get_inventory(defines.inventory.roboport_robot).insert{name = "construction-robot", count = 4}
+local chest = mk{name = "storage-chest", position = {6.5, 6.5}}
+chest.insert{name = "iron-plate", count = 100}
+chest.insert{name = "copper-plate", count = 50}
+"""
+
+NETWORK_TRUTH = """
+local s = game.surfaces.rk
+local rp = s.find_entities_filtered{name = "roboport"}[1]
+local net = rp.logistic_network
+rcon.print(helpers.table_to_json{id = net.network_id, robots = net.all_construction_robots,
+  idle = net.available_construction_robots, cells = #net.cells, iron = net.get_item_count("iron-plate"),
+  copper = net.get_item_count("copper-plate")})
+"""
+
+
+def port_up(lab):
+    arena(lab, PORT)
+    lab.advance(120)
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["network"], surface="rk", build=port_up)
+def tools_read_network(lab, bad, data):
+    """network describes the robots, roboports and stock that cover a point, and names the nearest roboport when none does."""
+    truth = jlua(lab, NETWORK_TRUTH)
+    r, size = call(lab, "network", x=3, y=3, surface="rk")
+    same(bad, "covered by the logistic area", (r["covered"], r["covers"]), (True, "logistic"))
+    same(bad, "network", (r["id"], r["roboports"], r["construction_robots"], r["construction_idle"]),
+         (truth["id"], truth["cells"], truth["robots"], truth["idle"]))
+    same(bad, "robot counts", (r["construction_robots"], r["logistic_robots"]), (4, 0))
+    same(bad, "storage", (r["storages"], r["requesters"]), (1, 0))
+    same(bad, "items", r["items"], {"iron-plate": truth["iron"], "copper-plate": truth["copper"]})
+    same(bad, "stock", (truth["iron"], truth["copper"]), (100, 50))
+    far, _ = call(lab, "network", x=40, y=0, surface="rk")
+    same(bad, "covered by the construction area only", (far["covered"], far.get("covers"), far.get("id")),
+         (True, "construction", truth["id"]))
+    none, _ = call(lab, "network", x=60.5, y=0, surface="rk")
+    near = none.get("nearest") or {}
+    same(bad, "nothing covers 60.5 tiles out", (none["covered"], near.get("x"), near.get("y"), near.get("distance")),
+         (False, 0, 0, 60.5))
+    top, _ = call(lab, "network", x=3, y=3, surface="rk", limit=1)
+    same(bad, "item cap", (len(top["items"]), top["total"], top.get("more")), (1, 2, True))
+    data["bytes_network"] = size
+    return f"network {r['id']}: {r['roboports']} roboport, {r['construction_robots']} robots, reply {size} B"
+
+
+# -- ascii_map --
+
+# (entity, x, y, direction or None, expected character); a 3x3 or 2x1 entity fills the tiles it covers
+LAYOUT = [
+    ("transport-belt", 0, 1, "east", ">"), ("transport-belt", 1, 1, "east", ">"), ("transport-belt", 2, 1, "east", ">"),
+    ("transport-belt", 3, 1, "north", "^"), ("transport-belt", 4, 1, "south", "v"), ("transport-belt", 5, 1, "west", "<"),
+    ("inserter", 0, 3, "south", "N"), ("inserter", 1, 3, "north", "S"), ("inserter", 2, 3, "west", "E"),
+    ("inserter", 3, 3, "east", "W"), ("iron-chest", 9, 3, None, "C"), ("small-electric-pole", 10, 3, None, "P"),
+    ("pipe", 0, 6, None, "="), ("pipe", 1, 6, None, "="), ("pipe-to-ground", 2, 6, "east", "p"),
+    ("underground-belt", 4, 6, "east", "U"), ("underground-belt-out", 6, 6, "east", "u"),
+]
+BIG = [(6, 3, 3, 3, "A"), (8, 6, 1, 2, "Y")]
+ORES = [("iron-ore", 0, 7, "i"), ("copper-ore", 1, 7, "c"), ("coal", 2, 7, "k"), ("stone", 3, 7, "s"), ("iron-ore", 9, 3, None)]
+GHOST, WATER, ROCK = (11, 1), [(10, 7), (11, 7)], (12, 4)
+
+
+def asciimap_build():
+    lines = []
+    for name, x, y, d, _ in LAYOUT:
+        base = name.replace("-out", "")
+        extra = ", type = 'output'" if name.endswith("-out") else ""
+        direction = f", direction = D.{d}" if d else ""
+        lines.append(f'mk{{name = "{base}", position = {{{x + 0.5}, {y + 0.5}}}{direction}{extra}}}')
+    lines.append('mk{name = "assembling-machine-1", position = {7.5, 4.5}}')
+    lines.append('mk{name = "splitter", position = {8.5, 7}, direction = D.east}')
+    for name, x, y, _ in ORES:
+        lines.append(f'mk{{name = "{name}", position = {{{x + 0.5}, {y + 0.5}}}, amount = 100, force = "neutral"}}')
+    lines.append(f'mk{{name = "entity-ghost", inner_name = "transport-belt", position = {{{GHOST[0] + 0.5}, {GHOST[1] + 0.5}}}}}')
+    lines.append("s.set_tiles{" + ", ".join(f'{{name = "water", position = {{{x}, {y}}}}}' for x, y in WATER) + "}")
+    lines.append('local rock for n, p in pairs(prototypes.entity) do if p.type == "simple-entity" and n:find("rock") then rock = n break end end')
+    lines.append(f'mk{{name = rock, position = {{{ROCK[0] + 0.5}, {ROCK[1] + 0.5}}}, force = "neutral"}}')
+    return "\n".join(lines)
+
+
+def asciimap_rows():
+    """The map the layout should give, without the rock, whose size depends on the prototype."""
+    grid = [["."] * 14 for _ in range(9)]
+    for x0, y0, w, h, ch in BIG:
+        for x in range(x0, x0 + w):
+            for y in range(y0, y0 + h):
+                grid[y][x] = ch
+    for _, x, y, ch in ORES:
+        if ch:
+            grid[y][x] = ch
+    for x, y in WATER:
+        grid[y][x] = "~"
+    grid[GHOST[1]][GHOST[0]] = "+"
+    for _, x, y, _, ch in LAYOUT:
+        grid[y][x] = ch
+    return ["".join(row) for row in grid]
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(["ascii_map"], surface="rk", build=lambda lab: arena(lab, asciimap_build()))
+def tools_read_ascii_map(lab, bad, data):
+    """ascii_map draws belts, inserters, machines, ore, water, a ghost and a rock where they are, and keeps within 64 x 64."""
+    r, size = call(lab, "ascii_map", surface="rk", x0=0, y0=0, x1=14, y1=9)
+    want = asciimap_rows()
+    rows = lst(r["rows"])
+    same(bad, "rows", [row.replace("X", ".") for row in rows], want)
+    if not any("X" in row for row in rows):
+        bad.append("the rock is not drawn")
+    same(bad, "origin and size", (r["x0"], r["y0"], r["w"], r["h"]), (0, 0, 14, 9))
+    same(bad, "legend keys", set(r["legend"]), set("".join(want)) | {"X"})
+    for ch, word in (("^", "north"), ("N", "north"), ("S", "south"), ("E", "east"), ("W", "west"), ("U", "input"), ("u", "output")):
+        if word not in r["legend"].get(ch, ""):
+            bad.append(f"legend for {ch!r} is {r['legend'].get(ch)!r}, which lacks {word}")
+    bare, _ = call(lab, "ascii_map", surface="rk", x0=0, y0=0, x1=14, y1=9, scenery=False)
+    same(bad, "scenery = false", lst(bare["rows"]), want)
+    inner, _ = call(lab, "ascii_map", surface="rk", x0=2, y0=1, x1=6, y1=4)
+    same(bad, "a window", lst(inner["rows"]), [row[2:6] for row in rows[1:4]])
+    wide, _ = call(lab, "ascii_map", surface="rk", x0=0, y0=0, x1=65, y1=10)
+    if "error" not in wide:
+        bad.append("an area wider than 64 returned no error")
+    big, size_big = call(lab, "ascii_map", surface="rk", x0=-32, y0=-32, x1=32, y1=32)
+    same(bad, "a 64 x 64 area", (len(lst(big["rows"])), {len(row) for row in lst(big["rows"])}), (64, {64}))
+    data.update(bytes_14x9=size, bytes_64x64=size_big)
+    return f"14 x 9 map matches, reply {size} B; 64 x 64 reply {size_big} B"
+
+
+# -- the shared rules --
+
+ALL = ["look", "inventory", "status", "belt_trace", "rate", "resources", "power", "fluid", "network", "ascii_map"]
+AREA_TOOLS = ["look", "inventory", "status", "resources", "power", "fluid", "ascii_map"]
+
+CROWD = """
+for row = 0, 3 do
+  for x = 0, 74 do mk{name = "pipe", position = {x - 37.5, row * 2 - 30.5}} end
+end
+for row = 0, 2 do
+  for x = 0, 82 do
+    if x < 80 then mk{name = "iron-chest", position = {x - 39.5, row * 2 + 10.5}}.insert{name = "iron-plate", count = 1} end
+  end
+end
+"""
+
+
+@fixture("create", tags=TAGS, camera=True)
+@case(ALL, surface="rk", build=lambda lab: arena(lab, CROWD))
+def tools_read_rules(lab, bad, data):
+    """Every tool caps its list, rejects an unknown name, a bad area and a stray argument with an error, never a Lua error."""
+    pipes = dict(x0=-40, y0=-32, x1=40, y1=-22, surface="rk")
+    first, _ = call(lab, "look", **pipes)
+    same(bad, "default cap", (len(lst(first["entities"])), first["total"], first.get("more"), first.get("next")), (200, 300, True, 200))
+    rest, _ = call(lab, "look", offset=200, **pipes)
+    same(bad, "second page", (len(lst(rest["entities"])), rest["total"], rest.get("more")), (100, 300, None))
+    everything, _ = call(lab, "look", limit=1000, **pipes)
+    same(bad, "limit 1000", (len(lst(everything["entities"])), everything.get("more")), (300, None))
+    counted, _ = call(lab, "look", count=True, **pipes)
+    same(bad, "count ignores the cap", counted["counts"], {"pipe": 300})
+    chests, _ = call(lab, "inventory", x0=-40, y0=9, x1=40, y1=17, surface="rk")
+    same(bad, "inventory cap", (len(lst(chests["entities"])), chests["total"], chests.get("more")), (200, 240, True))
+    summed, _ = call(lab, "inventory", sum=True, x0=-40, y0=9, x1=40, y1=17, surface="rk")
+    same(bad, "sum ignores the cap", summed, {"totals": {"iron-plate": 240}, "entities": 240})
+    fits = dict(x0=0, y0=0, x1=4, y1=4, surface="rk")
+    for tool in AREA_TOOLS:
+        for label, area in (("backwards", dict(fits, x0=9)), ("text", dict(fits, y1="far")), ("missing", {"x0": 0, "surface": "rk"}),
+                            ("stray", dict(fits, radius=3))):
+            r, _ = call(lab, tool, **area)
+            if not (isinstance(r, dict) and r.get("error") and r.get("hint")):
+                bad.append(f"{tool} with a {label} area did not return an error and a hint: {str(r)[:80]}")
+    for tool in ("belt_trace", "network"):
+        for label, args in (("no y", {"x": 1}), ("text", {"x": "a", "y": 0}), ("stray", {"x": 1, "y": 1, "radius": 3})):
+            r, _ = call(lab, tool, surface="rk", **args)
+            if not (isinstance(r, dict) and r.get("error") and r.get("hint")):
+                bad.append(f"{tool} with {label} did not return an error and a hint: {str(r)[:80]}")
+    for tool, args in (("look", {"name": "ironchest"}), ("look", {"type": "chest"}), ("inventory", {"item": "iron-platee"}),
+                       ("status", {"name": ["assembling-machine-9"]}), ("rate", {"items": ["iron-platee"]}),
+                       ("rate", {"items": []}), ("resources", {"name": "iron-platee"}), ("fluid", {"fluid": "waterr"})):
+        r, _ = call(lab, tool, **dict(fits, **args) if tool not in ("rate",) else dict(args, surface="rk"))
+        if not (isinstance(r, dict) and r.get("error") and r.get("hint")):
+            bad.append(f"{tool} {args} did not return an error and a hint: {str(r)[:80]}")
+    hint = call(lab, "rate", items=["iron-platee"], surface="rk")[0].get("hint", "")
+    if "iron-plate" not in hint:
+        bad.append(f"the hint for a near-miss item name does not suggest it: {hint!r}")
+    mars, _ = call(lab, "look", x0=0, y0=0, x1=1, y1=1, surface="mars")
+    if "nauvis" not in mars.get("hint", ""):
+        bad.append(f"an unknown surface does not list the surfaces: {mars}")
+    return "caps, names, areas and arguments all answer with an error and a hint"
