@@ -231,20 +231,16 @@ def assault_open(lab, nest_at, where="world", radius=144, name="assault"):
 
     `where="world"` adopts nauvis and the player force in place, so god calls act on the full world.
     `where="slice"` clones a square of `radius` around the nest onto its own surface, with the realm's research copied.
-    A world box restarts the lab's server between seeds, which reloads the save the lab started from.
+    A world box restarts the lab's server between seeds, which reloads the save the lab started from. The same
+    restart gives a lab that an earlier run used back to its start state before this box opens.
     """
     nest_at = [float(nest_at[0]), float(nest_at[1])]
-    area = _area(nest_at, radius)
-    if where == "world":
-        rec = lab.sbx("sandbox_new", name=name, inplace={"surface": "nauvis", "force": "player"})["sandbox"]
-    elif where == "slice":
-        rec = lab.sbx("slice_build", name=name, area=area, source="nauvis", research="copy")["sandbox"]
-    else:
+    if where not in ("world", "slice"):
         raise ValueError("where is 'world' or 'slice'")
-    surface = rec["surface"]
-    census = json.loads(lab.lua(CENSUS % {"surface": surface, "x": nest_at[0], "y": nest_at[1]}))
-    return {"box": name, "where": where, "surface": surface, "force": rec["force"], "area": area, "nest_at": nest_at,
-            "census": census, "base_tick": None, "dirty": False}
+    box = {"box": name, "where": where, "area": _area(nest_at, radius), "nest_at": nest_at, "base_tick": None}
+    _make(lab, box, clean=True)
+    box["census"] = json.loads(lab.lua(CENSUS % {"surface": box["surface"], "x": nest_at[0], "y": nest_at[1]}))
+    return box
 
 
 def _ingame(lab):
@@ -276,15 +272,26 @@ def _reload(lab, wait=180):
     raise RuntimeError(f"{lab.container} would not pause")
 
 
-def _restore(lab, box):
-    """Bring the box back to its start state after a run. A slice resets itself at the base tick."""
-    if not box["dirty"]:
-        return 0.0
+def _state(lab):
+    """What the bench knows of a lab: `epoch` counts reloads, `dirty` says a trial has run since the last one."""
+    return lab.__dict__.setdefault("_assault", {"epoch": 0, "dirty": False, "boxes": {}})
+
+
+def _make(lab, box, clean=False):
+    """Make the box exist in the lab's current epoch. Returns the seconds spent reloading and building."""
+    st = _state(lab)
     t0 = time.time()
-    if box["where"] == "world":
+    if st["dirty"] and (box["where"] == "world" or clean):
         _reload(lab)
-        lab.sbx("sandbox_new", name=box["box"], inplace={"surface": "nauvis", "force": "player"})
-    box["dirty"] = False
+        st["epoch"] += 1
+        st["dirty"] = False
+    if box.get("epoch") != st["epoch"]:
+        if box["where"] == "world":
+            rec = lab.sbx("sandbox_new", name=box["box"], inplace={"surface": "nauvis", "force": "player"})["sandbox"]
+        else:
+            lab.sbx("slice_build", name=box["box"], area=box["area"], source="nauvis", research="copy")
+            rec = next(b for b in lab.sbx("sandbox_list")["sandboxes"] if b["name"] == box["box"])
+        box.update(surface=rec["surface"], force=rec["force"], epoch=st["epoch"])
     return time.time() - t0
 
 
@@ -317,8 +324,8 @@ def _drive(lab, speed=SPEED, cap=WALL_CAP):
 
 
 def _trial(lab, box, tactic, params, seed, max_ticks):
-    restore_s = _restore(lab, box)
-    box["dirty"] = True
+    restore_s = _make(lab, box)
+    _state(lab)["dirty"] = True
     start = _base_tick(lab, box) + seed
     if box["where"] == "slice":
         start += 60
@@ -363,12 +370,12 @@ def assault_run(lab, tactic, params=None, seeds=5, max_ticks=18000, nest_at=None
     """
     path = tactic_path(tactic)
     if box is None:
-        boxes = lab.__dict__.setdefault("_assault_boxes", {})
+        boxes = _state(lab)["boxes"]
         key = (where, tuple(float(v) for v in nest_at) if nest_at else None)
         if key not in boxes:
             if nest_at is None:
                 raise ValueError("nest_at is needed to open a box")
-            boxes[key] = assault_open(lab, nest_at, where=where, radius=radius)
+            boxes[key] = assault_open(lab, nest_at, where=where, radius=radius, name=f"assault-{where}")
         box = boxes[key]
     return [_trial(lab, box, path, params or {}, seed, max_ticks) for seed in range(1, seeds + 1)]
 

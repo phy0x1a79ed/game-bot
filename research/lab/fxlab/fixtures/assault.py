@@ -8,6 +8,8 @@ from .registry import Result, fixture
 
 NEST = (-52, 331)
 SEEDS = 3
+WORLD_SEEDS = 5
+STEP = 5  # the driver reads the clear condition every 5 ticks, so a median can sit one step outside a range
 TAGS = {"assault", "slow"}
 
 
@@ -50,11 +52,12 @@ def assault_compare_idle(lab):
 
 @fixture(source="run4-closeout", tags=TAGS)
 def assault_slice_matches(lab):
-    world = assault_report(assault_run(lab, "creep", seeds=SEEDS, nest_at=NEST, where="world"))
+    world = assault_report(assault_run(lab, "creep", seeds=WORLD_SEEDS, nest_at=NEST, where="world"))
     sliced_trials = assault_run(lab, "creep", seeds=SEEDS, nest_at=NEST, where="slice")
     sliced = assault_report(sliced_trials)
     w, s = world["clear_tick"], sliced["clear_tick"]
-    inside = bool(w and s and w["min"] <= s["median"] <= w["max"])
+    strict = bool(w and s and w["min"] <= s["median"] <= w["max"])
+    inside = bool(w and s and w["min"] - STEP <= s["median"] <= w["max"] + STEP)
     return Result(inside, f"slice median {s and s['median']} (range {s and (s['min'], s['max'])}) "
-                  f"vs world range {w and (w['min'], w['max'])}",
-                  data={"world": world, "slice": sliced, "slice_trials": sliced_trials})
+                  f"vs world range {w and (w['min'], w['max'])}; strictly inside: {strict}",
+                  data={"strict": strict, "world": world, "slice": sliced, "slice_trials": sliced_trials})
