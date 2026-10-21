@@ -223,6 +223,10 @@ A JSON list. Each entry: `id`, `save`, `area` as `[[x0, y0], [x1, y1]]`, `produc
 
 - **CAUTION** Compare arms only from one cloned state. A god warm-up spreads intermediates differently on each surface, so a later switch to standard starts the arms from different stock. F9b switches both arms right after the build and gates the total each product makes from the finite stock.
 
+### Design (`designs.py`, `research/designs/<name>/`)
+
+A folder: `blueprint.txt`, `design.json` and `render.png`. `design.json` holds `name`, `summary`, `products`, `ports` and `area` (the frame `capture` reported), `footprint {w, h}`, `tags {items, tech}`, the full bench record, the render's frame, `admitted` and `author`. `admit` writes a folder only when the bench record carries an F1 verdict with `ok`, no unhandled port, a positive rate for every product, and a render that built every entity. Otherwise it raises `Refused` with the failed rule and writes nothing. Pass `area` from `capture`: without it the bench takes the entities' bounding box, which misses the ports whenever an entity overlaps the edge.
+
 ### Bench record (`bench.py`, fxlab-bench)
 
 `bench()` returns, and the design library stores, one JSON object:

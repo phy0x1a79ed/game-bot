@@ -21,6 +21,7 @@ from .lab import SHARED, Lab, SbxError
 DESIGNS = Path(__file__).resolve().parents[2] / "designs"
 NAME = re.compile(r"[a-z0-9-]{1,48}")
 OUTPUT = "/opt/factorio/script-output"
+LIBRARY_PX = 1536
 
 FACTS = """
 local B = helpers.json_to_table([==[%s]==])
@@ -223,13 +224,15 @@ def admit(blueprint, ports, products, name, summary="", author="", save="run4-cl
         lab.up(save=_seeded(save), camera=True)
         record = bench.bench(lab, area, blueprint=blueprint, ports=ports, minutes=minutes, warmup=warmup)
         gate(record, products)
-        shot = render.render_blueprint(lab, blueprint)
+        info = facts(lab, blueprint)
+        # a library render is for recognising a design, so its longest side stays near LIBRARY_PX
+        zoom = round(min(1.0, LIBRARY_PX / (32 * (max(info["w"], info["h"]) + 2))), 2)
+        shot = render.render_blueprint(lab, blueprint, zoom=zoom)
         root.mkdir(parents=True, exist_ok=True)
         shutil.rmtree(stage, ignore_errors=True)
         stage.mkdir()
         shot_path = _fetch(lab, shot, stage / "render.png")
         _check_render(shot, stage / "render.png")
-        info = facts(lab, blueprint)
         design = {
             "name": name, "summary": summary, "products": products, "ports": ports, "area": area,
             "footprint": {"w": info["w"], "h": info["h"]},

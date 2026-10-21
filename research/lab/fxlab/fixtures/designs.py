@@ -57,7 +57,7 @@ class _Stubbed:
         self.saved = (designs.Lab, designs.bench.bench, designs.render.render_blueprint, designs.facts, designs._seeded)
         self.tmp = tempfile.TemporaryDirectory()
 
-        def shoot(lab, blueprint):
+        def shoot(lab, blueprint, zoom=None):
             shot = copy.deepcopy(self.shot or GOOD_SHOT)
             shot["path"] = str(Path(self.tmp.name) / "shot.png")
             if self.png:
