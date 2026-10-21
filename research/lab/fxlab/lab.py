@@ -152,7 +152,12 @@ class Lab:
                 raise RuntimeError(f"{self.container} did not reach InGame:\n{self.logs(20)}")
             time.sleep(0.5)
         if not live:
-            self.lua("game.tick_paused = true")
+            # a fresh world swallows its first console command (the achievements warning), so confirm the pause
+            for _ in range(3):
+                if self.lua("game.tick_paused = true rcon.print(tostring(game.tick_paused))").strip() == "true":
+                    break
+            else:
+                raise RuntimeError(f"{self.container} would not pause")
         if camera:
             from . import camera as cam
             cam.attach(self)
