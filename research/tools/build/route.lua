@@ -10,7 +10,7 @@
 -- belt feeds, or that an inserter picks from or drops onto, are avoided, except at the two ends.
 local I = use("intent")
 local a = ... or {}
-local MAX_BOX, BUDGET = 48, 5000
+local MAX_BOX, BUDGET = 48, 3000
 if type(a) ~= "table" then return {error = "no arguments", hint = "pass from, to and box"} end
 
 local function fail(msg, hint) return {error = msg, hint = hint} end
