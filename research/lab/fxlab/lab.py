@@ -97,6 +97,7 @@ class Lab:
         self.world = world_name(name)
         self.boot = None
         self._sid = None
+        self.game_port = None
 
     # -- lifecycle --
 
@@ -128,14 +129,16 @@ class Lab:
         """The host directory the lab server writes as its script-output."""
         return SERVICE_DIR / "output" / self.sid
 
-    def up(self, save=None, create=False, live=False, camera=False):
+    def up(self, save=None, create=False, live=False, camera=False, headless=True):
         """Start the lab on a copy of save `save`, or on a new world when create is true.
 
         The game is paused on arrival unless live is true. camera=True joins a camera seat (camera.py).
+        headless=False publishes the game port, kept in `game_port`, so a client can join.
         """
         if self.running():
             raise RuntimeError(f"lab {self.world} already running")
-        args = {"game": GAME, "kind": "lab", "name": self.world, "live": bool(live)}
+        args = {"game": GAME, "kind": "lab", "name": self.world, "live": bool(live),
+                "headless": bool(headless)}
         if create:
             args["create"] = True
         else:
@@ -150,6 +153,7 @@ class Lab:
                     raise
                 time.sleep(CAP_POLL)
         self._sid = reply["session_id"]
+        self.game_port = reply.get("game_port")
         self.boot = None if create else Path(args["save"]).name.removesuffix(".zip")
         if camera:
             from . import camera as cam

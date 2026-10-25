@@ -37,6 +37,7 @@ def main(argv=None):
     src.add_argument("--create", action="store_true", help="new world from the service's lab map-gen settings")
     up.add_argument("--live", action="store_true", help="leave the game running instead of pausing it")
     up.add_argument("--camera", action="store_true", help="join a camera seat")
+    up.add_argument("--attach", action="store_true", help="publish the game port so a client can join")
     down = sub.add_parser("down")
     down.add_argument("names", nargs="*")
     down.add_argument("--all", action="store_true", help="every lab of this worktree")
@@ -76,8 +77,11 @@ def main(argv=None):
     if a.cmd in handlers:
         sys.exit(handlers[a.cmd](a) or 0)
     elif a.cmd == "up":
-        lab = Lab(a.name).up(save=a.save, create=a.create, live=a.live, camera=a.camera)
+        lab = Lab(a.name).up(save=a.save, create=a.create, live=a.live, camera=a.camera,
+                             headless=not a.attach)
         print(f"{lab.world} up ({lab.sid})")
+        if lab.game_port:
+            print(f"join at localhost:{lab.game_port}")
     elif a.cmd == "down":
         from .lab import PREFIX, service, worlds
         for r in worlds() if a.all else []:
