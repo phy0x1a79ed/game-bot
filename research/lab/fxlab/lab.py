@@ -50,7 +50,7 @@ class SbxError(RuntimeError):
         self.code, self.detail = code, detail
 
 
-def service(verb, timeout=900, **args):
+def service(verb, /, timeout=900, **args):
     """Call one realm-service verb through the gateway and return its reply."""
     req = urllib.request.Request(f"{SERVICE}/{verb}", data=json.dumps(args).encode(), method="POST",
                                  headers={"Content-Type": "application/json"})
@@ -181,7 +181,7 @@ class Lab:
         if seat:
             service("rejoin", timeout=3700, seat_id=seat["seat_id"])
 
-    def _call(self, verb, timeout=900, **args):
+    def _call(self, verb, /, timeout=900, **args):
         return service(verb, timeout=timeout, session_id=self.sid, **args)
 
     # -- Lua --
