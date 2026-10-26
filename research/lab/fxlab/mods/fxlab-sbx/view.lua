@@ -2,7 +2,7 @@
 -- The camera is a real peer, so every state change here must stay deterministic.
 local sbx = require("sbx")
 
-local M = {remote = {}}
+local M = {remote = {}, events = {}}
 
 local BOOTH = "cam-booth"
 local MAX_SIDE = 4096
@@ -13,6 +13,10 @@ local function init()
 end
 M.on_init = init
 M.on_configuration_changed = init
+
+M.events[defines.events.on_player_joined_game] = function(e)
+  sbx.free_humans(game.get_player(e.player_index))
+end
 
 local function xy(t) return {x = t.x or t[1], y = t.y or t[2]} end
 
@@ -49,7 +53,7 @@ end
 -- under script-output. An area is centred and sized to fill the frame at the zoom, each side capped at 4096.
 function M.remote.view_shot(a)
   init()
-  local p = game.players[a.player or storage.view.player or "fxcam"]
+  local p = game.players[a.player or storage.view.player or sbx.CAMERA]
   if not (p and p.connected) then sbx.fail("not_found", "no connected camera player") end
   local s = game.surfaces[a.surface or "nauvis"]
   if not s then sbx.fail("bad_args", "no surface " .. tostring(a.surface)) end

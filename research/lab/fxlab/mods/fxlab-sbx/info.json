@@ -1,6 +1,6 @@
 {
   "name": "fxlab-sbx",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "title": "fxlab sandboxes",
   "author": "game-bot",
   "description": "Lab-only: sandboxes (a surface and a force) cut from a world, god-mode calls with a reversible ledger, and the camera booth.",

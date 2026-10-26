@@ -447,6 +447,7 @@ R.sbx_mode = function(a)
   local box = sbx.get(a.name)
   if a.mode == "god" then
     box.mode = "god"
+    sbx.free_humans()
     return {mode = "god"}
   elseif a.mode ~= "standard" then
     sbx.fail("bad_args", "mode is standard or god")
@@ -491,6 +492,7 @@ R.sbx_mode = function(a)
   -- a slice powers itself through a global network in god mode; standard rules run on its own generators
   if cut_power and not box.inplace then sbx.surface(box).destroy_global_electric_network() end
   box.mode, box.power = "standard", cut_power and "cut" or "keep"
+  sbx.free_humans()
   return {mode = "standard", undone = undone, skipped = skipped, research_entries = researched}
 end
 

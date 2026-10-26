@@ -29,6 +29,26 @@ end
 function M.surface(box) return game.surfaces[box.surface] end
 function M.force(box) return game.forces[box.force] end
 
+-- A human in a lab has no body: the god controller, with cheat mode (free, instant crafting) unless a sandbox on
+-- the player force plays by standard rules. The camera keeps the spectator controller view_booth gives it.
+M.CAMERA = "fxcam"
+
+function M.free_humans(only)
+  local cheat = true
+  for _, box in pairs(storage.sbx.boxes) do
+    if box.force == "player" and box.mode ~= "god" then cheat = false end
+  end
+  local camera = storage.view and storage.view.player or M.CAMERA
+  for _, p in pairs(only and {only} or game.connected_players) do
+    if p.name ~= camera then
+      local body = p.character
+      if p.controller_type ~= defines.controllers.god then p.set_controller{type = defines.controllers.god} end
+      if body and body.valid then body.destroy() end
+      p.cheat_mode = cheat
+    end
+  end
+end
+
 -- Refuse a god call on a standard-mode sandbox.
 function M.require_god(name)
   local box = M.get(name)
