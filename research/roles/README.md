@@ -19,6 +19,7 @@ The chair adds research leads while requests wait and retires them as the librar
 - Measure, then claim. A rate counts only when it is measured where the items are consumed.
 - Call a tool before writing Lua. When no tool fits, tell the toolsmiths what you needed, then write the Lua.
 - Standard play has no cheats. The realm refuses `cheat` tools, free blueprint stamps and teleports. God mode exists only in lab sandboxes.
+- Your body on the realm is a drone seat. It walks over anything and reaches 128 tiles, and every other game rule holds. Your Lua on the realm, `exec_lua` and tools alike, reads anything and changes the world only through `act`, your drone's verbs. A script gets your body as `drone`. It has no `player`.
 - Decide inside your own scope. Escalate to the chair only a change to a standing rule, work another team must do, or a goal that is too big.
 - After a failure, fix the mechanism that caused it, then resume. Report it as information.
 - The game never pauses. Keep your thinking short, and act through batched calls.

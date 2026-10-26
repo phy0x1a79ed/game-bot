@@ -10,13 +10,13 @@ Each scope edits only the files it owns. A scope that needs a change in another 
 
 | Scope | Owns |
 |---|---|
-| `fxlab` (hub) | this file, `lab.py`, `__main__.py`, `tools.py`, `ratchet.py`, `fixtures/__init__.py`, `fixtures/registry.py`, `mods/fxlab-sbx/control.lua`, `mods/fxlab-sbx/sbx.lua` |
+| `fxlab` (hub) | this file, `lab.py`, `__main__.py`, `tools.py`, `ratchet.py`, `fixtures/__init__.py`, `fixtures/registry.py`, `mods/fxlab-sbx/control.lua`, `mods/fxlab-sbx/sbx.lua`, `research/tools/lib/core.lua` |
 | `fxlab-slice` | `mods/fxlab-sbx/slice.lua`, `fixtures/slice.py` |
 | `fxlab-god` | `mods/fxlab-sbx/god.lua`, `fixtures/god.py` |
 | `fxlab-cam` | `camera.py`, `mods/fxlab-sbx/view.lua`, `fixtures/cam.py` |
 | `fxlab-fid` | `fixtures/fidelity.py`, `research/lab/fidelity/` |
-| `fxlab-tools-read` | `research/tools/read/`, `fixtures/tools_read.py` |
-| `fxlab-tools-build` | `research/tools/build/`, `fixtures/tools_build.py` |
+| `fxlab-tools-read` | `research/tools/read/`, `research/tools/lib/rd.lua`, `fixtures/tools_read.py` |
+| `fxlab-tools-build` | `research/tools/build/`, `research/tools/lib/intent.lua`, `research/tools/lib/joins.lua`, `fixtures/tools_build.py` |
 | `fxlab-bench` | `bench.py`, `fixtures/bench.py` |
 | `fxlab-assault` | `assault.py`, `research/lab/tactics/`, `fixtures/assault.py` |
 | `fxlab-render` | `render.py`, `fixtures/render.py`, new verbs appended to `view.lua` |
@@ -38,6 +38,7 @@ Paths without a directory are under `research/lab/fxlab/`.
 - `Lab.up(live=True)` leaves the game running. The default pauses it, and existing fixtures rely on that.
 - `Lab.reload(name)` loads a save in place, pauses it and rejoins the camera. Without a name it loads the boot save. A lab made with `create` has no boot save.
 - A lab runs the service's copy of `game-bot-control`.
+- A lab is god-mode scripting with no agent bodies: fixtures act through `Lab.lua`, `sbx` and tools. A person who joins a lab gets no character. The lab mod switches them to the god controller, with cheat mode under sandbox rules and without it under standard rules. The camera keeps its spectator booth.
 - Each `Lab.lua` is one `exec_lua` and costs one game frame (16.7 ms at speed 1). Batch work into one call.
 
 ## sbx: the lab mod
@@ -145,19 +146,19 @@ Each verb takes `name`, the sandbox.
 
 ### Camera (`camera.py`, fxlab-cam)
 
-- `attach(lab)` joins a seat of role `camera`, and `detach(lab)` leaves it. `Lab.up(camera=True)` calls `attach`, and releasing the lab removes the seat. The service parks the camera in the booth, allows one per world, never reclaims it for idleness and refuses it under realm rules.
+- `attach(lab)` joins a seat of role `camera`, and `detach(lab)` leaves it. `Lab.up(camera=True)` calls `attach`, and releasing the lab removes the seat. The service parks the camera in the booth, allows one per world, never reclaims it for idleness. Under realm rules it joins as a spectator.
 - `render(lab, area=None, position=None, zoom=1, surface="nauvis", info=False, resolution=None) -> Path`: a PNG in the camera seat's output folder (`camera.output(lab)`), returned once the file stops growing. `frame(area, zoom)` gives the position and pixel size `render` will use.
 - `render` rejoins a camera whose client left the game. It raises on a lab without a camera seat, so a render never adds a camera to a run that had none.
 - `desyncs(lab)` lists desync lines in the camera and server logs. A fidelity arm with a camera must check it, and must check that `fxcam` is still connected.
 - **CAUTION** The camera writes its files as root, so deleting one can fail. Every shot gets a new path, so a leftover never stands in for a new shot.
-- The service mounts the sprite atlas caches from `~/agentic_workspace/.awm/services/rlm-factorio/output/camera-cache` read-only into every camera, so cameras run side by side. Without them each join rebuilds the atlas.
+- The service mounts the sprite atlas caches read-only into every camera, so cameras run side by side. It builds them once per image and mod set, under `~/agentic_workspace/.awm/services/rlm-factorio/output/camera-cache/<key>/`.
 - A fixture that needs the seeded save takes `source = "run4-closeout"`, takes that lab down, and brings it up again on `run4-closeout+cam`. It holds one lab slot at a time.
 - `seed(save) -> str`: writes `<save>+cam` into `~/.cache/fxlab/_saves/`, with the camera player already in the save and parked in its booth. Start every arm of a fidelity comparison from the seeded save.
 - CLI: `fxlab.sh seed-camera <save>` and `fxlab.sh shot <lab> ...`, registered through `camera.register(sub)`.
 
 ## Tools
 
-A tool is one Lua file under `research/tools/<group>/<name>.lua`. The library is what agents call instead of writing one-off Lua. Groups are folders only: names are unique across the library.
+A tool is one Lua file under `research/tools/<group>/<name>.lua`. The library is what agents call instead of writing one-off Lua. Groups are folders only: names are unique across the library. `lib/` holds the shared libs: `core` (directions, vectors, argument checks, ghost unwrapping, belt helpers), `rd` (paging and entity records), `intent` and `joins` (the pre-build checks). Put a helper that two tools need in a lib, not in both tools.
 
 ### Header
 
@@ -172,19 +173,20 @@ The file starts with `--- key: value` lines. The first other line ends the heade
 > `--- uses: geom` (optional, the libs it calls)
 
 - `read` changes nothing. `act` changes the world as a player could: ghosts, deconstruction orders, recipes, filters. `cheat` does anything a player cannot, such as `create_entity` of a built entity or inserting items from nothing. The realm refuses `cheat` tools for crew roles.
+- Under realm rules the mod runs every tool **guarded**. The tool sees `game`, `prototypes` and every object they return as read-only proxies. A property read passes, and so does a method named `get_*`, `find_*`, `count_*`, `can_*`, `is_*` or `has_*`, or one on a short allowlist. Any assignment and any other method raises an error naming the call. An `act` tool changes the world only through `act`, the drone verbs of the calling seat (`act.ghost`, `act.unghost`, `act.build`, `act.insert` and the rest, and `act.drone()` for its body). Write each `act` tool so it uses `act` when present and falls back to direct calls in a lab.
 - A `call` tool is a function body. Its arguments arrive as `...` (`local args = ...`). It returns one table, never printed text.
 - A `lib` tool returns a table of functions. Another tool gets it with `use("name")`. A peer caches a lib for one tick only, so every peer runs lib bodies at the same tick and no lib keeps state across ticks. **WARNING** A lib body must not change the game. It sees `storage` write-blocked. The guard stops accidents only: `remote.call` can still reach the game.
 - In a tool, `_G` is the tool's own env and `getmetatable(_ENV)` is hidden, so no tool reaches the mod's real `storage`.
 - A tool may not register event handlers.
 
-### Game verbs (game-bot-control 0.6.1, rlm-factorio)
+### Game verbs (game-bot-control 0.7.0, rlm-factorio)
 
 Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and on the realm.
 
 | Verb | Args | Returns |
 |---|---|---|
 | `tool_define` | `name`, `code`, `kind`, `effect`, `summary` | `name`, `size`. Raises on a bad name, a compile error or a lib that writes `storage` |
-| `tool_call` | `name`, `args`, `deny` (a list of effects) | `{ok = true, r = <value>}` or `{ok = false, error = "no_tool" \| "tool_error" \| "denied", detail}` |
+| `tool_call` | `name`, `args`, `deny` (a list of effects), `guarded`, `seat` | `{ok = true, r = <value>}` or `{ok = false, error = "no_tool" \| "tool_error" \| "denied", detail}` |
 | `blueprint_stamp` | without `seat`: `surface`, `force = "player"` and the usual args | as with a seat |
 | `tool_list` | | `tools`: name, kind, effect, summary, size, calls, errors, last_error, defined |
 | `tool_drop` | `name` | |
@@ -192,7 +194,7 @@ Called as `remote.call("game_bot", verb, args)`. They run the same in a lab and 
 Check the mod version with `script.active_mods["game-bot-control"]`. A mod without a data stage never appears in the server log's "Loading mod" lines.
 
 - Tools live in `storage.tools`, apart from the stored scripts, so the script LRU never evicts them. The cap is 256 tools.
-- A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts.
+- A `call` tool sees the game's globals, `use`, its own persistent table as `storage` (`storage.tool_data[name]`) and the restricted `script` of stored scripts. A non-read tool called with a `seat` also sees `act`.
 - `tool_call` counts calls and errors per tool. `deny` covers the tool, every lib it uses and every tool it calls through `remote.call`, for the whole call. A nested call can widen `deny` but never narrow it. A denied call counts as neither a call nor an error.
 - From Python: `fxlab.tools.sync(lab)`, `fxlab.tools.call(lab, tool, /, **args)`, `fxlab.tools.listing(lab)`.
 - Keep replies compact and capped (`limit`, `offset`, `total`, `more`). An RCON reply over about 4 KB costs about two more frames. A tool call runs in one tick on every peer, so a slow call stalls every player on the realm. From the shell: `fxlab.sh tool-sync <lab>`, `fxlab.sh tools <lab>` and `fxlab.sh tool <lab> <name> key=value ...`.
@@ -204,11 +206,11 @@ Check the mod version with `script.active_mods["game-bot-control"]`. A mod witho
 - `sbx{verb, args}` forwards to the lab mod, which only a lab loads.
 - `advance{ticks, speed}` runs a world forward and pauses it again. One call runs for at most `RLM_FACTORIO_WAIT_MAX_S` seconds (default 600) and then replies `error = "TIMEOUT"` with the ticks it ran.
 - `wait_until{condition, timeout_s}` blocks until a condition holds: `entities_working`, `ghosts_built`, or a read `tool` whose result passes `op` at `path`. `timeout_s` is required and clamped to `RLM_FACTORIO_WAIT_MAX_S`. The reply carries `met`, or `error = "TIMEOUT"`, with the last observed state. Call it instead of a sleep loop.
-- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `advance`, a camera seat, `blueprint_stamp` with `build = true` or `build_mode = "built"`, every `sbx` verb outside a read allowlist (`sandbox_list`, `verbs`, `slice_list`, `slice_ports`, `slice_fingerprint`, `slice_area_of_base`, `slice_timing`, `bonuses`, `wave_status`, `ledger`, `view_shot`, `view_booth`, and `sbx_mode` with `mode = "standard"`), and every `cheat` tool, through `tool_call{deny = {"cheat"}}`. The refusal names the rule. Under realm rules the service refuses `tool` on a mod older than 0.6.1, because an older mod ignores `deny`.
+- Rules: the realm runs `realm` rules. A lab runs `sandbox` rules unless the call passes `rules = "realm"`. Under realm rules the service refuses `teleport`, `research`, `advance`, `blueprint_stamp` with `build = true` or `build_mode = "built"`, every `sbx` verb outside a read allowlist (`sandbox_list`, `verbs`, `slice_list`, `slice_ports`, `slice_fingerprint`, `slice_area_of_base`, `slice_timing`, `bonuses`, `wave_status`, `ledger`, `view_shot`, `view_booth`, and `sbx_mode` with `mode = "standard"`), and every `cheat` tool, through `tool_call{deny = {"cheat"}}`. The refusal names the rule. Under realm rules the service refuses `tool` on a mod older than 0.7, because an older mod cannot guard it.
 - Under sandbox rules the command budget counts an overrun but never refuses it. Each seatless caller gets its own socket and throttle key on each world, and each world its own UPS gate.
 - `tool_sync` defines libs in `uses:` order and refuses a non-cheat tool whose `uses:` chain reaches a cheat lib.
 - The admin override is an `admin_token` argument that matches `RLM_FACTORIO_ADMIN_TOKEN_FILE`, by default `~/.config/rlm-factorio/admin-token`. It lifts every realm-rules refusal. A missing file means no override. It is for Tony. It guards against accidents, not against an agent that reads the file. Crew briefs never mention it.
-- `exec_lua` stays allowed under realm rules. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
+- `exec_lua` stays allowed under realm rules and runs guarded, like a tool, with `act` for its seat. The script binds `seat` and `drone`, never `player`. The service logs each call as one JSON line: time, session, seat, code size, code hash and the first 200 characters. The log is `RLM_FACTORIO_EXEC_LOG`, by default `~/.local/state/rlm-factorio/exec-lua.jsonl`. The toolsmith team mines this log.
 
 ## Fixtures
 

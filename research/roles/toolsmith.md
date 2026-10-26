@@ -22,4 +22,4 @@ The brief for the toolsmith team: how it finds the work the crew repeats and tur
 - Return a compact table, capped, with `more` and `total` when the cap cut it.
 - Return `{error, hint}` for bad input, never a Lua error.
 - Finish within about 20 ms of engine time at its caps. A tool runs in one tick on every peer, so a slow tool freezes every player.
-- Change nothing if its effect is `read`. An `act` tool changes the world only as a player could: ghosts, marks, recipes and filters.
+- Change nothing if its effect is `read`. An `act` tool changes the world only as a player could: ghosts, marks, recipes and filters. On the realm it runs guarded and changes the world only through `act`, so use `act` when it is present.

@@ -11,7 +11,7 @@ The brief for a project lead: what it owns, how it gets designs and how it measu
 
 ## How you work
 
-1. Survey before you build. Read the site with the read tools: `resources`, `status`, `power`, `belt_trace` and `look`. Find what limits the current rate.
+1. Survey before you build. Read the site with the read tools: `resources`, `status`, `power`, `belt_trace`, `look` and `verify`. Find what limits the current rate.
 2. Find a design for each missing block with `design-find`. Check its ports against what your site can deliver, and its footprint against the space.
 3. When no design fits, write a request to a research lead. State the product, the rate, the footprint limit and the available inputs. Keep building what does not depend on it.
 4. Give each builder one task with a done condition that can be measured, such as "copper cable reaches the circuit block at 180 per minute".
