@@ -4,38 +4,22 @@
 --- summary: route a belt between two tiles around obstacles, using undergrounds where cheaper, and return it as a checked build list
 --- args: from {x, y}; to {x, y} (the first and last belt tiles); box {x0, y0, x1, y1} (tile search area, at most 48 x 48, holding both ends); surface (default nauvis); force (default player); belt (default transport-belt, its underground follows); underground (override); start_flow {dx, dy} and end_flow {dx, dy} (optional direction of the first and last belt); accept (codes allowed on every entry)
 --- returns: {ok, list, length, belts, undergrounds, issues, summary} or {error, hint}
---- uses: intent
+--- uses: core, intent
 -- Weighted A* over (tile, direction): a straight step costs 1, a turn 3, an underground hop 5 plus its span.
 -- The list is in flow order, in the format check takes, and has already been through check. Tiles that an existing
 -- belt feeds, or that an inserter picks from or drops onto, are avoided, except at the two ends.
-local I = use("intent")
+local C, I = use("core"), use("intent")
 local a = ... or {}
-local MAX_BOX, BUDGET = 48, 3000
+local MAX_BOX, BUDGET, EPS = 48, 3000, 0.01
 if type(a) ~= "table" then return {error = "no arguments", hint = "pass from, to and box"} end
-
-local function fail(msg, hint) return {error = msg, hint = hint} end
+local fail, pt, card = C.fail, C.vec, C.card
 local function num(v) return type(v) == "number" end
-local function pt(v)
-  if type(v) ~= "table" then return nil end
-  local x, y = v.x or v[1], v.y or v[2]
-  if num(x) and num(y) then return {x, y} end
-end
-local function card(v)
-  v = pt(v)
-  if not v then return nil end
-  local x, y = v[1] > 0.001 and 1 or (v[1] < -0.001 and -1 or 0), v[2] > 0.001 and 1 or (v[2] < -0.001 and -1 or 0)
-  if (x ~= 0) ~= (y ~= 0) then return {x, y} end
-end
 
-if a.surface ~= nil and type(a.surface) ~= "string" then return fail("surface must be a name", "for example \"nauvis\"") end
-if a.force ~= nil and type(a.force) ~= "string" then return fail("force must be a name", "for example \"player\"") end
 if a.belt ~= nil and type(a.belt) ~= "string" then return fail("belt must be an entity name", "for example transport-belt") end
 if a.underground ~= nil and type(a.underground) ~= "string" then return fail("underground must be an entity name", "for example underground-belt") end
 if a.accept ~= nil and type(a.accept) ~= "table" then return fail("accept must be a list of codes", "for example {\"BELT_JOINS_FOREIGN\"}") end
-local s = a.surface == nil and game.surfaces.nauvis or game.surfaces[a.surface]
-if not s then return fail("no surface named " .. tostring(a.surface), "the usual surface is nauvis") end
-local f = a.force == nil and game.forces.player or game.forces[a.force]
-if not f then return fail("no force named " .. tostring(a.force), "the usual force is player") end
+local s, f = C.world(a)
+if not s then return f end
 
 local from, to = pt(a.from), pt(a.to)
 if not from or not to then return fail("from and to must both be {x, y}", "for example from = {x = 10.5, y = 4.5}: the tile that holds the point is used") end
@@ -73,22 +57,29 @@ if (a.start_flow and not sdir) or (a.end_flow and not edir) then
   return fail("start_flow and end_flow must be one-axis directions", "for example {1, 0} for east")
 end
 
-local CARDS = {[0] = {0, -1}, [1] = {1, 0}, [2] = {0, 1}, [3] = {-1, 0}}
-local function didx(c) for d = 0, 3 do if CARDS[d][1] == c[1] and CARDS[d][2] == c[2] then return d end end end
-local DN = {[0] = "north", [1] = "east", [2] = "south", [3] = "west"}
+local CARDS = {[0] = C.CARD[0], C.CARD[4], C.CARD[8], C.CARD[12]}
 local function id(x, y) return (y - Y0) * W + (x - X0) end
 local function inb(x, y) return x >= X0 and x <= X1 and y >= Y0 and y <= Y1 end
 
--- open tiles: no entity and no ground shares the belt's collision layers there (decided once per tile, when the search first needs it)
+-- open tiles: nothing stands there and the engine would take a belt ghost (decided once per tile, when the search
+-- first needs it). The engine alone passes a belt over a belt, which a ghost would fast-replace.
 local area = {{X0 - 1, Y0 - 1}, {X1 + 2, Y1 + 2}}
-local taken = I.occupied(s, bp, area)
-local ground = I.tile_free(s, bp)
+local taken = {}
+for _, w in pairs(s.find_entities_filtered{area = area}) do
+  if not C.IGNORED[w.type] then
+    local b = w.bounding_box
+    for x = math.floor(b.left_top.x + EPS), math.ceil(b.right_bottom.x - EPS) - 1 do
+      for y = math.floor(b.left_top.y + EPS), math.ceil(b.right_bottom.y - EPS) - 1 do taken[x * 65536 + y] = true end
+    end
+  end
+end
 local open = {}
 local function is_open(x, y)
   local i = id(x, y)
   local v = open[i]
   if v == nil then
-    v = not taken(x, y) and ground(x, y)
+    v = not taken[x * 65536 + y] and s.can_place_entity{name = belt, position = {x + 0.5, y + 0.5}, force = f,
+      build_check_type = defines.build_check_type.manual_ghost}
     open[i] = v
   end
   return v
@@ -97,17 +88,9 @@ end
 local bad, ugaxis = {}, {}
 local function mark(px, py) if inb(math.floor(px), math.floor(py)) then bad[id(math.floor(px), math.floor(py))] = true end end
 for _, e in pairs(s.find_entities_filtered{area = area, type = {"transport-belt", "underground-belt", "splitter"}}) do
-  local c = ({[0] = {0, -1}, [4] = {1, 0}, [8] = {0, 1}, [12] = {-1, 0}})[e.direction]
-  if c then
-    local p = e.position
-    if e.type == "transport-belt" or (e.type == "underground-belt" and e.belt_to_ground_type == "output") then mark(p.x + c[1], p.y + c[2]) end
-    if e.type == "splitter" then
-      local px, py = -c[2] * 0.5, c[1] * 0.5
-      mark(p.x + px + c[1], p.y + py + c[2])
-      mark(p.x - px + c[1], p.y - py + c[2])
-    end
-    if e.type == "underground-belt" and inb(math.floor(p.x), math.floor(p.y)) then ugaxis[id(math.floor(p.x), math.floor(p.y))] = e.direction % 8 end
-  end
+  local p = e.position
+  for _, o in ipairs(C.belt_outputs(e.type, e.direction, {p.x, p.y}, e.type == "underground-belt" and e.belt_to_ground_type)) do mark(o[1], o[2]) end
+  if e.type == "underground-belt" and inb(math.floor(p.x), math.floor(p.y)) then ugaxis[id(math.floor(p.x), math.floor(p.y))] = e.direction % 8 end
 end
 for _, e in pairs(s.find_entities_filtered{area = area, type = "inserter"}) do
   mark(e.pickup_position.x, e.pickup_position.y)

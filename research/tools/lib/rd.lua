@@ -3,26 +3,19 @@
 --- effect: read
 --- summary: shared argument checks, paging and entity records for the read tools
 --- args: none
---- returns: {ctx, fail, page, nameset, typeset, record, inventories, belt_items, merge, dir, status, r2}
+--- returns: {ctx, fail, page, nameset, typeset, record, inventories, belt_items, merge, add, find, dir, status, r2, BELT_TYPES, STATUS_TYPES, INVENTORY_TYPES, STOCK_TYPES}
+--- uses: core
+local core = use("core")
 local rd = {}
 
-local DIR, STATUS = {}, {}
-for k, v in pairs(defines.direction) do DIR[v] = k end
+local DIR, STATUS = core.DIR, {}
 for k, v in pairs(defines.entity_status) do STATUS[v] = k end
 
 local MAX_LIMIT, MAX_SIDE = 300, 4000
 
-function rd.r2(v) return math.floor(v * 100 + 0.5) / 100 end
+rd.r2, rd.fail = core.r2, core.fail
 function rd.dir(d) return DIR[d] end
 function rd.status(e) return e.status and STATUS[e.status] or nil end
-function rd.fail(msg, hint) return {error = msg, hint = hint} end
-
-local function sorted_keys(t)
-  local out = {}
-  for k in pairs(t) do out[#out + 1] = k end
-  table.sort(out)
-  return out
-end
 
 local function number(a, k)
   local v = a[k]
@@ -61,22 +54,15 @@ function rd.ctx(a, spec)
   for _, k in ipairs(spec.extra or {}) do known[k] = true end
   for k in pairs(a) do
     if not known[k] then
-      return nil, rd.fail("unknown argument '" .. tostring(k) .. "'", "accepted: " .. table.concat(sorted_keys(known), ", "))
+      return nil, rd.fail("unknown argument '" .. tostring(k) .. "'", "accepted: " .. table.concat(core.sorted(known), ", "))
     end
   end
 
   local c = {surface = a.surface or "nauvis", force = a.force or "player"}
-  if type(c.surface) ~= "string" then return nil, rd.fail("surface must be a name", "got " .. type(c.surface)) end
-  if type(c.force) ~= "string" then return nil, rd.fail("force must be a name", "got " .. type(c.force)) end
-  c.s = game.surfaces[c.surface]
-  if not c.s then
-    local names = {}
-    for _, s in pairs(game.surfaces) do names[#names + 1] = s.name end
-    table.sort(names)
-    return nil, rd.fail("no surface named '" .. tostring(c.surface) .. "'", "surfaces: " .. table.concat(names, ", "))
-  end
-  c.f = game.forces[c.force]
-  if not c.f then return nil, rd.fail("no force named '" .. tostring(c.force) .. "'") end
+  local werr
+  c.s, werr = core.world(a)
+  if not c.s then return nil, werr end
+  c.f = werr
 
   local err
   if spec.paged then
@@ -247,21 +233,7 @@ function rd.inventories(e)
   return out
 end
 
-local BELT_TYPES = {["transport-belt"] = true, ["underground-belt"] = true, ["splitter"] = true,
-  ["loader"] = true, ["loader-1x1"] = true, ["linked-belt"] = true, ["lane-splitter"] = true}
-rd.BELT_TYPES = BELT_TYPES
-
---- Items on a belt-like entity as left, right lane tables. Odd transport lines are the left lane.
---- An underground entrance also holds the items travelling under the ground, on its lines 3 and 4.
-function rd.belt_items(e)
-  local left, right = {}, {}
-  local n = e.get_max_transport_line_index()
-  if e.type == "underground-belt" and e.belt_to_ground_type == "output" then n = math.min(n, 2) end
-  for i = 1, n do
-    rd.merge(i % 2 == 1 and left or right, e.get_transport_line(i))
-  end
-  return left, right
-end
+rd.BELT_TYPES, rd.belt_items = core.BELT_TYPES, core.belt_items
 
 local ROTATES = {}
 local function rotates(name)
@@ -333,7 +305,13 @@ function rd.find(c, filter)
   local names, types, ghosts = filter.names, filter.types, filter.ghosts
   local plain, ghost = {}, {}
   if ghosts ~= true then
+    -- an unfiltered search returns ghosts too; they come from the ghost search alone
     plain = c.s.find_entities_filtered{area = c.area, force = c.force, name = names, type = types, limit = cap + 1}
+    if not (names or types) then
+      local kept = {}
+      for _, e in pairs(plain) do if e.type ~= "entity-ghost" then kept[#kept + 1] = e end end
+      plain = kept
+    end
   end
   if ghosts ~= false then
     ghost = c.s.find_entities_filtered{area = c.area, force = c.force, name = "entity-ghost", limit = cap + 1}

@@ -1,4 +1,4 @@
-"""Fixtures for the build tools under research/tools/build/ (check, route, place). Owned by scope fxlab-tools-build (T13).
+"""Fixtures for the build tools under research/tools/build/ (check, route, place) and verify, which reads a build back. Owned by scope fxlab-tools-build (T13).
 
 The fifteen check cases port the intent-check prototype. Each builds its world on a flat surface of its own, calls
 `check` through the tool registry and compares the codes, directions and types per entry. A check call must leave the
@@ -14,7 +14,7 @@ import time
 from .. import camera, tools
 from .registry import Result, fixture
 
-BUILD = ("check", "route", "place")
+BUILD = ("check", "route", "place", "verify")
 SEEDED = "run4-closeout+cam"
 MODULE_AREA = ((111, -40), (153, -14))
 
@@ -913,3 +913,65 @@ def build_cost_at_caps(lab):
     detail = "; ".join(f"{k} {v:.1f} ms" for k, v in times.items()) + (f"; over {CAP_MS} ms: {over}" if over else "")
     return finish(lab, not over and not notes, detail + ("; " + "; ".join(notes) if notes else ""),
                   {k: round(v, 1) for k, v in times.items()})
+
+
+VERIFY_WORLD = """
+local function at(p) return {p.x, p.y} end
+local lone = mk(s, {name = "burner-inserter", position = {1.5, 0.5}, direction = D.east})
+mk(s, {name = "iron-chest", position = at(lone.pickup_position)})
+local good = mk(s, {name = "burner-inserter", position = {1.5, 8.5}, direction = D.east})
+mk(s, {name = "iron-chest", position = at(good.pickup_position)})
+mk(s, {name = "iron-chest", position = at(good.drop_position)})
+mk(s, {name = "underground-belt", position = {0.5, 4.5}, direction = D.east, type = "input"})
+mk(s, {name = "underground-belt", position = {0.5, 12.5}, direction = D.east, type = "input"})
+mk(s, {name = "underground-belt", position = {3.5, 12.5}, direction = D.east, type = "output"})
+mk(s, {name = "assembling-machine-1", position = {8.5, 1.5}, recipe = "iron-gear-wheel"})
+"""
+
+
+@fixture(source="create", tags={"tools", "build"}, camera=True)
+def build_verify_faults(lab):
+    """verify names each fault the engine shows in a small build: an arm dropping on the ground, an unpaired underground
+    entrance and a machine on no network, and nothing on the arm and the underground pair that are whole. A pure read."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    surface = world(lab, "verify", VERIFY_WORLD)
+    before = census(lab, surface)
+    res, ms = call(lab, "verify", surface=surface, x0=-2, y0=-2, x1=12, y1=14, all=True)
+    after = census(lab, surface)
+    rows = {(r["name"], r["x"], r["y"]): r for r in lst(res.get("entities"))}
+    issues = {k: sorted(lst(r.get("issues"))) for k, r in rows.items() if r.get("issues")}
+    want = {("burner-inserter", 1.5, 0.5): ["DROPS_ON_GROUND"], ("underground-belt", 0.5, 4.5): ["UNDERGROUND_UNPAIRED"],
+            ("assembling-machine-1", 8.5, 1.5): ["NO_NETWORK"]}
+    good = rows.get(("burner-inserter", 1.5, 8.5), {})
+    pair = rows.get(("underground-belt", 0.5, 12.5), {}).get("belt", {}).get("pair")
+    lone_pick = (rows.get(("burner-inserter", 1.5, 0.5), {}).get("pick") or {}).get("name")
+    ok = (issues == want and res.get("counts") == {"DROPS_ON_GROUND": 1, "UNDERGROUND_UNPAIRED": 1, "NO_NETWORK": 1}
+          and (good.get("pick") or {}).get("name") == "iron-chest" and (good.get("drop") or {}).get("name") == "iron-chest"
+          and lone_pick == "iron-chest" and lst(pair) == [3.5, 12.5] and before == after)
+    pending = [k for k, r in rows.items() if (r.get("pick") or {}).get("pending") or (r.get("drop") or {}).get("pending")]
+    return finish(lab, ok, f"issues {issues}; good arm {good.get('pick')} -> {good.get('drop')}; pair {pair}; "
+                           f"pending {pending}; world unchanged {before == after}; {ms:.0f} ms", {"ms": round(ms, 1)})
+
+
+@fixture(source="create", tags={"tools", "build"}, camera=True)
+def build_verify_after_place(lab):
+    """A placed clean list reads back as ghosts to build; once built by script from those ghosts, verify finds every
+    arm's targets and the underground pair, with no fault but the missing power the cell never had."""
+    skip = ready(lab)
+    if skip:
+        return skip
+    surface = world(lab, "verify-place", PLACE_WORLD)
+    placed = tools.call(lab, "place", surface=surface, list=clean_cell())
+    planned = tools.call(lab, "verify", surface=surface, x0=-2, y0=-2, x1=10, y1=10)
+    lab.lua(f'for _, g in pairs(game.surfaces["{surface}"].find_entities_filtered{{name = "entity-ghost"}}) do g.revive() end')
+    res, ms = call(lab, "verify", surface=surface, x0=-2, y0=-2, x1=10, y1=10, all=True)
+    rows = lst(res.get("entities"))
+    arms = [r for r in rows if r["name"] == "inserter"]
+    codes = sorted({c for r in rows for c in lst(r.get("issues"))})
+    ok = (placed.get("ok") and planned.get("ghosts") == len(clean_cell()) and len(arms) == 2
+          and all(r.get("pick") and r.get("drop") for r in arms) and codes in ([], ["NO_NETWORK"])
+          and any(r.get("belt", {}).get("pair") for r in rows) and not res.get("ghosts"))
+    return finish(lab, ok, f"ghosts before build {planned.get('ghosts')}; arms {[(r.get('pick'), r.get('drop')) for r in arms]}; "
+                           f"codes {codes}; {ms:.0f} ms", {"ms": round(ms, 1)})

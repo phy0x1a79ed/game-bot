@@ -4,8 +4,8 @@
 --- summary: follow a belt line downstream (and upstream with up = true) through undergrounds and splitters as straight segments, with items per lane and why each branch stops
 --- args: x, y (a tile on the belt); up (bool: also trace upstream); taps (bool: list inserters that pick from or drop onto the line); limit (belt entities to visit, both directions together, default 200, max 500); surface
 --- returns: {start = {name, x, y}, tiles, segments = {{id, parent, kind, dir, from = {x, y}, to = {x, y}, n, left = {item = n}, right = {item = n}}, ...}, lanes = {left, right}, ends = {{seg, x, y, why = "end" | "loop" | "join" | "cap", faces}}, taps = {{name, x, y, seg, role = "pickup" | "drop", other = {name, x, y, recipe}}}, up = {same fields}}; segments run in flow order and parent is the segment they branch from; {error, hint} on bad args
---- uses: rd
-local rd = use("rd")
+--- uses: core, rd
+local C, rd = use("core"), use("rd")
 local a = ...
 local c, err = rd.ctx(a, {point = true, extra = {"up", "taps", "limit"}})
 if not c then return err end
@@ -15,7 +15,7 @@ if type(limit) ~= "number" or limit ~= math.floor(limit) or limit < 1 or limit >
 end
 local s = c.s
 
-local DV = {[0] = {0, -1}, [4] = {1, 0}, [8] = {0, 1}, [12] = {-1, 0}}
+local DV = C.CARD
 local BELTS = {"transport-belt", "underground-belt", "splitter"}
 
 local start = s.find_entities_filtered{area = {{c.x - 0.3, c.y - 0.3}, {c.x + 0.3, c.y + 0.3}}, type = BELTS}[1]
@@ -63,11 +63,8 @@ local function faces(e)
     probes[1] = {p.x + d[1] - 0.5 * math.abs(d[2]), p.y + d[2] - 0.5 * math.abs(d[1])}
   end
   for _, q in ipairs(probes) do
-    for _, o in pairs(s.find_entities_filtered{position = q}) do
-      if o.type ~= "resource" and o.type ~= "item-entity" and o.type ~= "corpse" and o.type ~= "character" then
-        return o.type == "entity-ghost" and o.ghost_name .. " (ghost)" or o.name
-      end
-    end
+    local o = C.entities_at(s, q)[1]
+    if o then return o.type == "entity-ghost" and o.ghost_name .. " (ghost)" or o.name end
   end
   return nil
 end
@@ -150,15 +147,8 @@ local function tiles(e, add)
   end
 end
 
-local IGNORED = {resource = true, ["item-entity"] = true, corpse = true, character = true}
-
 -- the entity standing on a world position: an inserter's target is only resolved after its first tick
-local function entity_at(pos)
-  for _, o in pairs(s.find_entities_filtered{position = pos}) do
-    if not IGNORED[o.type] then return o end
-  end
-  return nil
-end
+local function entity_at(pos) return C.entities_at(s, pos)[1] end
 
 local function find_taps(segs)
   local owner = {}
